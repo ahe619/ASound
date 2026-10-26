@@ -48,8 +48,9 @@ an NVIDIA graphics card. Mobile performance still needs validation on real devic
 - **Vocab** - everything you saved, with audio, plus spoken review (see the meaning, say the English, spaced repetition).
 - **Me** - five levels (Beginner, Foundational, Skilled, Talented, Master); a placement test built from 5 words you
   choose or a topic; an "about you" interview; a voice recommendation based on your own pitch.
-- **Settings** - interface language (English, Chinese and more), the language for explanations and help (16
-  languages), 16 voices with preview, standard or most-natural voice, speed, correction strictness.
+- **Settings** - automatic / phone / tablet / desktop layouts, interface and help languages, downloadable
+  Kokoro voices or system speech, speed and correction strictness. The natural server voice is offered only
+  when that service is available.
 
 ## Phones
 
@@ -59,9 +60,10 @@ an NVIDIA graphics card. Mobile performance still needs validation on real devic
   old app window. Failed updates leave the current installed version available. Raw `app/` is for development;
   it does not install the new release worker. To try browser-side model downloads on a computer, use
   `http://localhost:8770/?web`.
-- **GitHub Pages**: `.github/workflows/pages.yml` checks `dist/web` on pushes to `main`. Enable publishing by
+- **GitHub Pages**: `.github/workflows/pages.yml` checks and builds `dist/soundoa-site/site` on pushes to `main`. Enable publishing by
   configuring Pages to use GitHub Actions and setting the repository Actions variable `ASOUND_PAGES_ENABLED`
-  to `true`. Model weights and local Python environments are excluded. See
+  to `true`. It hosts the pinned 101 MB Kokoro q8 voice pack as an optional download; conversation models and
+  local Python environments are excluded. See
   [the publishing and mobile update guide](docs/WEB_RELEASES.md).
 - **Android app**: `mobile/android` is a small WebView app around the same `app/` folder.
   `powershell -ExecutionPolicy Bypass -File tools\build_android.ps1` builds `dist\ASound-android.apk` (it fetches Java
@@ -76,11 +78,18 @@ See [the China deployment guide](docs/CHINA_DEPLOYMENT.md). This is preparation 
 network access or real-phone inference performance has been validated. Browser ASR/TTS/CPU downloads can retain
 verified-size ranges on compatible servers and check available SHA-256 digests; GPU downloads remain managed by WebLLM.
 
-For `soundoa.cn`, run `python tools/prepare_soundoa_site.py` to prepare a separate publication-only repository and ZIP.
-The existing source repository can stay private. See [the soundoa.cn launch guide](docs/SOUNDOA_LAUNCH.md) for
+For `soundoa.cn`, run `python tools/prepare_soundoa_site.py --with-web-voice` to prepare a verified website and ZIP
+using the local voice files. CI uses `--download-web-voice` to fetch missing files from a pinned upstream revision
+and verify every checksum. The existing public `ahe619/ASound` repository publishes the generated website. See [the soundoa.cn launch guide](docs/SOUNDOA_LAUNCH.md) for
 the free hosting setup, domain verification, DNS and HTTPS steps. Preparing the bundle does not publish the website.
 
 ## Vocabulary study
+
+Text study works without model downloads. For spoken words, download just the **Phone-compatible voice pack**
+in Settings or the model setup screen. It uses Kokoro q8 on WebAssembly, with no NVIDIA requirement. The voice
+files download from the same website and are cached separately from webpage updates. Automatic speech uses
+the installed voice; without it, an available system English voice can be used (some system voices need the
+internet). Browser simulation and real CPU synthesis are checked; real-phone memory and speed still need testing.
 
 The **Vocabulary / Learn words** page includes local flashcards for everyday vocabulary, CET-4, CET-6, and a
 postgraduate-exam reference list. Topic and situation filters are independently optional; leaving both empty

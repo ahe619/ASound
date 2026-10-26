@@ -92,7 +92,7 @@ export const prefs = Object.assign(
     level: 2,
     strictness: "normal",
     voice: "af_heart",
-    voiceEngine: "standard", // standard (Kokoro) | natural (Chatterbox on an NVIDIA GPU)
+    voiceEngine: "auto", // auto | standard (downloaded Kokoro) | system | natural (available server only)
     rate: 1,
     autoplay: true,
     drill: "flap",
@@ -111,7 +111,7 @@ if (!["gentle", "normal", "strict"].includes(prefs.strictness)) prefs.strictness
 if (!SCENARIOS.some((s) => s.id === prefs.scenario)) prefs.scenario = "chat";
 if (!DRILLS.some((d) => d.id === prefs.drill)) prefs.drill = "flap";
 if (!DOC_MODES.includes(prefs.docMode)) prefs.docMode = "teacher";
-if (!["standard", "natural"].includes(prefs.voiceEngine)) prefs.voiceEngine = "standard";
+if (!["auto", "standard", "system", "natural"].includes(prefs.voiceEngine)) prefs.voiceEngine = "auto";
 prefs.rate = Math.min(1.3, Math.max(0.6, Number(prefs.rate) || 1));
 if (prefs.rate === 0.95) prefs.rate = 1; // the old default sounded a little dragged
 if (!["auto", "hf", "mirror", "deployment"].includes(prefs.source)) prefs.source = "auto";

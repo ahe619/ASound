@@ -2,7 +2,7 @@
 
 用户已确认创建 `soundoa.cn`，并选择直接使用现有仓库 [`ahe619/ASound`](https://github.com/ahe619/ASound)。域名注册完成不等于网站上线，也不代表 ICP 备案完成。
 
-试用方案采用静态网页托管，用户首次下载模型，在自己的设备上运行。仓库的工作流会从源码构建，只发布网页目录，不发布本机 Python 环境、模型权重或私人数据。网页运行所需的 JavaScript 会随网站公开。
+试用方案采用静态网页托管，用户首次下载模型，在自己的设备上运行。仓库工作流发布网页和按需下载的 Kokoro 量化语音包，不发布本机 Python 环境、对话模型权重或私人数据。网页运行所需的 JavaScript 会随网站公开。
 
 经用户明确授权，当前 `ahe619/ASound` 仓库已设为公开；GitHub Pages 已创建，发布来源为 GitHub Actions，仓库变量 `ASOUND_PAGES_ENABLED=true` 已启用并核验。
 
@@ -13,14 +13,14 @@
 在项目根目录生成并验证网页发布包：
 
 ```powershell
-.\.venv\Scripts\python.exe tools\prepare_soundoa_site.py
+.\.venv\Scripts\python.exe tools\prepare_soundoa_site.py --with-web-voice
 ```
 
 构建出的网页位于 `dist/soundoa-site/site/`。源码仓库根目录的 `.github/workflows/pages.yml` 会执行同一构建命令，并仅将该网页目录交给 Pages；它不上传整个仓库作为网站。
 
 把审核后的源码、运行库、测试和构建配置提交到已有 `ahe619/ASound` 的 `main` 分支。`.gitignore` 已排除模型、Python 环境、`build/` 和 `dist/`。无需提交生成的 `dist/`，也不需要新建仓库。
 
-`dist/ASound-soundoa-ready-0.3.0.zip` 保留为便携交付包。解压后的 `soundoa-site/site/` 可用于本地预览或其他静态托管平台；`instructions/` 是操作说明。包内的 README 和预构建产物工作流适用于独立的产物仓库，**不要用它们覆盖已有 ASound 源码仓库的 README 或工作流**。生成 ZIP 只完成准备，不会发布网站。
+`dist/ASound-soundoa-ready-0.3.1.zip` 保留为便携交付包。解压后的 `soundoa-site/site/` 可用于本地预览或其他静态托管平台；`instructions/` 是操作说明。包内的 README 和预构建产物工作流适用于独立的产物仓库，**不要用它们覆盖已有 ASound 源码仓库的 README 或工作流**。生成 ZIP 只完成准备，不会发布网站。
 
 截图中的 15 元 AI 建站套餐不是本方案的必需项，先不用加购。[万网活动页](https://wanwang.aliyun.com/newactivity/benefits?tid=newCustomer)
 将它列为配有云资源和赠送域名权益的 AI 建站产品；计费周期和续费价需以具体订单为准。未核实其导入已有应用的限制，不能确认它是否能直接承载 ASound 的 JavaScript、WASM 和离线网页功能。
@@ -40,7 +40,7 @@ GitHub Free 支持公开仓库的 Pages，Pages 可托管 HTML、CSS、JavaScrip
 在现有源码仓库修改、检查后推送 `main`。Pages 权限和 `ASOUND_PAGES_ENABLED` 都已配置时，Actions 会重新构建并更新网站；应用内的更新机制会提示用户安装新版，模型和学习记录保留在同一网站来源下。
 不要直接修改生成的 `site/` 文件，它们的内容必须与发布校验清单一致。只生成本地 ZIP，或在部署尚未启用时推送源码，都不会改变公开网站。
 
-此免费托管方案用于当前试用；若以后收费运营，需重新核对托管政策和用量。模型文件继续放在模型下载源，不能当作网页资产全部塞进 Pages。
+此免费托管方案用于当前试用；若以后收费运营，需重新核对托管政策和用量。Pages 只额外托管约 101 MB 的 Kokoro 量化语音包，作为单独的按需下载文件；对话和识别模型继续使用外部下载源。
 [GitHub Pages 限制](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)
 
 ## 绑定 soundoa.cn
@@ -74,7 +74,11 @@ GitHub Pages 支持自定义域名的 HTTPS，无需为这条发布路线另买�
 - 完整缓存后的断网启动、录音与连续对话；手机速度尚不能由电脑测试保证。
 - 发布新版本后，更新提示与手动更新是否正常。
 
-模型继续从现有 Hugging Face／镜像源下载。高自然度 Chatterbox 当前依赖电脑上的 CUDA 服务，不能随这份静态网站在手机本地运行；手机试用先使用 Kokoro。
+Kokoro 量化语音包由网站同源提供，20 个文件均校验 SHA-256，用户主动下载后保存在浏览器里。网页更新不会自动下载这 101 MB；语音包版本变化时使用新的缓存标识。CI 用 `--download-web-voice` 从固定上游版本取文件，构建失败时不会发布。完整许可证随网页提供。
+
+背单词可不下载任何模型。需要朗读时，只下载手机兼容语音包即可，无需对话模型和识别模型。自动模式使用已下载的 Kokoro；未下载时可回退到系统英语语音，系统语音是否联网取决于设备。高自然度 Chatterbox 依赖电脑上的 CUDA 服务，只在检测到可用服务时显示。
+
+设置中的「网页布局」支持自动适配、手机、平板和电脑。布局选择不会改变设备能力，也不会让手机开启 CUDA。已进行多尺寸浏览器检查和电脑上的 WebAssembly 语音合成；不将模拟手机 UA 的测试当成真实手机性能测试。
 
 网页包包含 CPU 模式需要的兼容运行库，并纳入离线版本校验，避免部分浏览器启动 CPU 模型时再临时访问外部 CDN。
 这只解决兼容运行库的下载依赖，不能保证所有手机的内存、浏览器功能和推理速度都足够。

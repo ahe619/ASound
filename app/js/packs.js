@@ -5,6 +5,7 @@
 // Add ?web to the address to try the phone path on a computer.
 import { prefs, savePrefs } from "./state.js";
 import { downloadModelFile, discardModelPartial, modelPartialBytes } from "./model-download.js";
+import { deviceInfo } from "./device.js";
 
 export const CACHE = "asound-models-v1";
 export const CANON = "https://models.asound.invalid/"; // cache keys look the same whichever source served the file
@@ -28,6 +29,7 @@ export const packStatus = (id) => status[id] || { state: "absent", done: 0, tota
 export const freeSpace = () => free;
 export const resolvedSource = () => resolved;
 export const sourceList = () => Object.keys(catalog?.sources || {});
+export const hostedVoice = () => mode === "web" && !!voiceRoot();
 let connectionResults = null;
 let checkingConnections = false;
 export const connectionStatus = () => ({ checking: checkingConnections, results: connectionResults });
@@ -40,13 +42,13 @@ export async function initPacks() {
     savePrefs();
   }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
+  if (mode === "web") voiceRoot(); // Validate the optional same-origin voice source before using it.
   gpu = await probeGpu();
   await refresh();
 }
 
 async function probeGpu() {
-  const ua = navigator.userAgent || "";
-  const info = { webgpu: false, f16: false, vendor: "", mobile: /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || !!(navigator.userAgentData && navigator.userAgentData.mobile) };
+  const info = { webgpu: false, f16: false, vendor: "", mobile: deviceInfo().mobile };
   if (new URLSearchParams(location.search).has("nogpu")) return info; // try the no-WebGPU path on a computer
   try {
     const a = navigator.gpu && (await navigator.gpu.requestAdapter());
@@ -171,11 +173,27 @@ async function pickSource() {
   return resolved || sourceList()[0];
 }
 
+function voiceRoot() {
+  const source = catalog?.voiceSource;
+  if (!source) return null;
+  if (!/^[a-f0-9]{16}$/.test(source.version) || source.models !== `voice-models/${source.version}`
+      || source.repository !== "onnx-community/Kokoro-82M-v1.0-ONNX") {
+    throw new Error("Invalid hosted browser voice source");
+  }
+  return new URL(`${source.models}/`, location.href).href;
+}
+function hostedVoiceFile(f) {
+  return mode === "web" && voiceRoot() && f.repo === catalog.voiceSource.repository
+    && packById("voice")?.files.some((item) => item.path === f.path && item.repo === f.repo);
+}
+function voiceCanon() { return `${CANON}voice/${catalog.voiceSource.version}/`; }
+
 export function fileUrl(f, source) {
+  if (hostedVoiceFile(f)) return `${voiceRoot()}${f.repo}/resolve/main/${f.path}`;
   const src = catalog.sources[source];
   return f.repo ? `${src.models}/${f.repo}/resolve/main/${f.path}` : `${src.libs}/${f.lib.replace(/^libs\//, "")}`;
 }
-export const canonKey = (f) => CANON + (f.repo ? `${f.repo}/${f.path}` : f.path);
+export const canonKey = (f) => (hostedVoiceFile(f) ? voiceCanon() : CANON) + (f.repo ? `${f.repo}/${f.path}` : f.path);
 
 // Engine settings for a pack: local files on the desktop, the download source on the web.
 export async function engineConfig(id, sourceName = null) {
@@ -188,6 +206,9 @@ export async function engineConfig(id, sourceName = null) {
       llm: p.llm ? { ...p.llm, model: `${base}${p.llm.repo}/`, lib: `${base}${p.llm.lib}` }
         : p.cpu ? { kind: "cpu", model_id: p.id, ctx: p.cpu.ctx, url: `${base}${p.cpu.repo}/${p.cpu.path}` } : null,
     };
+  }
+  if (id === "voice" && hostedVoice()) {
+    return { mode, base: voiceRoot(), cache: CACHE, canon: voiceCanon(), asr: undefined, llm: null };
   }
   // WebLLM caches by address, so a language model keeps the source it was downloaded from.
   const source = sourceName || (p.kind === "llm" && llmSource(id)) || (await pickSource());
@@ -342,7 +363,7 @@ async function pumpWeb() {
       ctl.signal.throwIfAborted();
       setLlmSource(id, source);
     } else {
-      const source = await pickSource();
+      const source = p.id === "voice" && hostedVoice() ? null : await pickSource();
       ctl.signal.throwIfAborted();
       const cache = await caches.open(CACHE);
       let done = 0;
@@ -350,7 +371,7 @@ async function pumpWeb() {
         ctl.signal.throwIfAborted();
         if (await cache.match(canonKey(f))) { done += f.size; set(done); continue; }
         await downloadModelFile({ cache, key: canonKey(f), file: f,
-          urls: [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
+          urls: source === null ? [fileUrl(f, null)] : [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
           signal: ctl.signal, onBytes: (n) => set(done + n) });
         done += f.size;
         set(done);

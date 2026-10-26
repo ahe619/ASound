@@ -5,7 +5,7 @@ import vm from "node:vm";
 
 const source = (await readFile(new URL("../app/js/packs.js", import.meta.url), "utf8"))
   .replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, "")
-  + "\nglobalThis.api = { initPacks, recommended, activePacks, variant, ready, packStatus, packMode, sourceList, engineConfig, fileUrl, canonKey, checkConnections, connectionStatus, resolvedSource, refresh, install, cancel, remove, setSource };";
+  + "\nglobalThis.api = { initPacks, recommended, activePacks, variant, ready, packStatus, packMode, sourceList, hostedVoice, engineConfig, fileUrl, canonKey, checkConnections, connectionStatus, resolvedSource, refresh, install, cancel, remove, setSource };";
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const deferred = () => {
@@ -80,6 +80,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
       storage: { persist: async () => true, estimate: async () => ({ quota: 100000, usage: 0 }) },
     },
     prefs: env.prefs, savePrefs: () => { env.saved++; },
+    deviceInfo: () => ({ mobile }),
     localStorage: { getItem: (key) => stored.get(key) || null, setItem: (key, value) => stored.set(key, value) },
     caches: { open: async () => cache },
     modelPartialBytes: async (key) => env.partials.get(key) || 0,
@@ -114,6 +115,51 @@ test("phones start with the small GPU model even when they report 8 GB memory", 
   assert.equal(f32.api.variant("llm-0.8b"), "llm-0.8b-f32");
   const cpu = await fixture({ mobile: true, gpu: false });
   assert.deepEqual(plain(cpu.api.recommended()), { llm: "llm-cpu", asr: "asr-tiny" });
+});
+
+function hostedVoiceCatalog(version = "abcdef0123456789") {
+  const data = catalog();
+  const repo = "onnx-community/Kokoro-82M-v1.0-ONNX";
+  data.voiceSource = { models: `voice-models/${version}`, repository: repo, version, manifest: "voice-models.json" };
+  data.packs.find((p) => p.id === "voice").files = [{ repo, path: "onnx/model_quantized.onnx", size: 10 }];
+  return data;
+}
+
+test("hosted voice downloads and runtime configuration stay on the site's own origin without probing external sources", async () => {
+  const env = await fixture({ data: hostedVoiceCatalog(), mobile: true });
+  const p = env.data.packs.find((p) => p.id === "voice");
+  const before = env.requests.length;
+  const config = await env.api.engineConfig("voice");
+  assert.equal(env.api.hostedVoice(), true);
+  assert.equal(config.base, "https://app.test/ASound/voice-models/abcdef0123456789/");
+  assert.equal(config.canon, "https://models.asound.invalid/voice/abcdef0123456789/");
+  assert.equal(env.requests.length, before);
+  assert.equal(env.api.fileUrl(p.files[0], "hf"), `${config.base}${p.files[0].repo}/resolve/main/${p.files[0].path}`);
+  assert.equal(env.api.fileUrl(env.data.packs.find((p) => p.id === "asr-tiny").files[0], "hf"), "https://hf.test/test/asr-tiny/resolve/main/config.json");
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "voice should install independently");
+  assert.equal(env.downloads.length, 1);
+  assert.deepEqual(Array.from(env.downloads[0].urls), [env.api.fileUrl(p.files[0], null)]);
+  assert.equal(env.requests.length, before);
+});
+
+test("a voice source revision changes cache identity and does not treat old unversioned files as installed", async () => {
+  const old = await fixture({ data: hostedVoiceCatalog(), cached: ["voice"] });
+  assert.equal(old.api.packStatus("voice").state, "absent");
+  const newer = await fixture({ data: hostedVoiceCatalog("1111111111111111") });
+  const file = old.data.packs.find((p) => p.id === "voice").files[0];
+  assert.notEqual(old.api.canonKey(file), newer.api.canonKey(file));
+  const desktop = await fixture({ data: hostedVoiceCatalog(), desktop: true });
+  assert.equal(desktop.api.hostedVoice(), false);
+  assert.equal((await desktop.api.engineConfig("voice")).base, "https://app.test/ASound/models/");
+});
+
+test("hosted voice source refuses absolute URLs and traversal instead of redirecting model downloads", async () => {
+  for (const models of ["https://other.test/models", "//other.test/models", "../voice-models/abcdef0123456789"]) {
+    const data = hostedVoiceCatalog();
+    data.voiceSource.models = models;
+    await assert.rejects(fixture({ data }), /Invalid hosted browser voice source/);
+  }
 });
 
 test("existing desktop recommendations and local-server downloads are preserved", async () => {

@@ -3,7 +3,8 @@
     python tools/build_web.py
     python -m http.server 8782 --directory dist/web
 
-The output excludes downloaded models and development pages. Every shipped asset
+The output excludes downloaded models unless the verified browser voice is opted
+in with --with-web-voice. Development pages are always excluded. Every app asset
 has a SHA-256 digest in the generated worker so a partial deployment cannot replace
 a working installed release. No third-party Python dependencies are required.
 """
@@ -16,6 +17,11 @@ import re
 import shutil
 import tempfile
 from urllib.parse import unquote, urlsplit
+
+try:
+    from .prepare_web_voice import prepare_voice
+except ImportError:
+    from prepare_web_voice import prepare_voice
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
@@ -78,8 +84,10 @@ def source_files(source):
             yield relative, path
 
 
-def build(source, output, version, license_file=None, model_base_url=None, model_packs=None):
+def build(source, output, version, license_file=None, model_base_url=None, model_packs=None,
+          with_web_voice=False, download_web_voice=False):
     source, output = Path(source).resolve(), Path(output).resolve()
+    with_web_voice = with_web_voice or download_web_voice
     model_base_url = validate_model_base_url(model_base_url) if model_base_url is not None else None
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version):
         raise ValueError("Version must contain 1-64 letters, digits, dots, underscores or hyphens")
@@ -100,7 +108,8 @@ def build(source, output, version, license_file=None, model_base_url=None, model
         for name in ROOT_FILES:
             if not (stage / name).is_file():
                 raise ValueError(f"Missing required web asset: {name}")
-        if model_base_url or model_packs is not None:
+        optional_files = set()
+        if model_base_url or model_packs is not None or with_web_voice:
             catalog_path = stage / "packs.json"
             catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
             if model_packs is not None:
@@ -114,12 +123,15 @@ def build(source, output, version, license_file=None, model_base_url=None, model
                 # A self-hosted build must not silently send model requests to third parties.
                 catalog["sources"] = {"deployment": {"models": model_base_url, "libs": model_base_url + "/libs"}}
                 catalog["defaultSource"] = "deployment"
+            if with_web_voice:
+                optional_files = prepare_voice(catalog, source / "models", stage, download=download_web_voice)
             catalog_path.write_text(encode(catalog) + "\n", encoding="utf-8", newline="\n")
         if license_file:
             shutil.copyfile(license_file, stage / "LICENSES.md")
         (stage / ".nojekyll").write_text("", encoding="utf-8")
         assets = [{"url": p.relative_to(stage).as_posix(), "sha256": digest(p.read_bytes())}
-                  for p in sorted(stage.rglob("*")) if p.is_file() and p.name != ".nojekyll"]
+                  for p in sorted(stage.rglob("*")) if p.is_file() and p.name != ".nojekyll"
+                  and p.relative_to(stage).as_posix() not in optional_files]
         # Include the worker template: changing only its logic must get a fresh cache.
         release = version + "-" + digest((worker + encode(assets) + version).encode("utf-8"))[:12]
         metadata = encode({"version": release, "appVersion": version}) + "\n"
@@ -139,7 +151,8 @@ def build(source, output, version, license_file=None, model_base_url=None, model
                 raise ValueError("Output changed while building; refusing to replace it")
             shutil.rmtree(output)
         stage.rename(output)
-        return {"version": release, "files": len(assets), "bytes": size, "output": str(output)}
+        return {"version": release, "files": len(assets), "bytes": size, "output": str(output),
+                "optionalVoiceFiles": len(optional_files)}
     finally:
         if stage.exists() and stage.parent == output.parent and stage.name.startswith(".asound-web-"):
             shutil.rmtree(stage)
@@ -151,8 +164,11 @@ def main():
     parser.add_argument("--version", default=(ROOT / "VERSION").read_text(encoding="utf-8").strip())
     parser.add_argument("--model-base-url", help="Public HTTPS model root; omit to keep the existing model sources")
     parser.add_argument("--packs", help="Comma-separated model pack IDs to expose; omit to include all packs")
+    parser.add_argument("--with-web-voice", action="store_true", help="Host the verified q8 phone/browser voice as an optional same-origin download")
+    parser.add_argument("--download-web-voice", action="store_true", help="Fetch missing pinned voice files before building (implies --with-web-voice)")
     args = parser.parse_args()
-    result = build(ROOT / "app", args.out, args.version, ROOT / "LICENSES.md", args.model_base_url, args.packs)
+    result = build(ROOT / "app", args.out, args.version, ROOT / "LICENSES.md", args.model_base_url, args.packs,
+                   with_web_voice=args.with_web_voice or args.download_web_voice, download_web_voice=args.download_web_voice)
     print(f"{result['version']}: {result['files']} assets, {result['bytes'] / 1_000_000:.1f} MB -> {result['output']}")
 
 

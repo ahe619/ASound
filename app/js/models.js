@@ -78,6 +78,7 @@ export function renderModels() {
   const free = freeSpace();
   fill($("#models"),
     h("header", { class: "sum-head" }, head),
+    web ? voiceDownloadCard({ study: true }) : null,
     quick,
     web ? h("p", { class: "note-card" }, t("models.webDownloadNote")) : null,
     startRow(),
@@ -92,7 +93,7 @@ function section(sec, rec, active, web) {
   // without WebGPU only the processor model can run; with it, the faster GPU models are the ones to offer
   const groups = sec.groups.filter((g) => {
     const pack = packById(variant(g));
-    return pack && !(web && pack.desktopOnly) && (sec.key !== "llm" || (g === "llm-cpu") !== gpu);
+    return pack && !(web && (pack.desktopOnly || g === "voice")) && (sec.key !== "llm" || (g === "llm-cpu") !== gpu);
   });
   if (!groups.length) return null;
   const noGpu = sec.key === "llm" && !gpuInfo().webgpu;
@@ -100,6 +101,16 @@ function section(sec, rec, active, web) {
     h("div", { class: "stack-xs" }, h("h2", { class: "sec-title" }, t(`models.sec.${sec.key}`)), h("p", { class: "hint-line" }, t(`models.sec.${sec.key}.note`))),
     noGpu ? h("p", { class: "note-card warn" }, t("models.noGpu")) : null,
     h("ul", { class: "pack-list" }, groups.map((g) => packRow(g, sec, rec, active))));
+}
+
+// Voice-only study does not require the conversation model or speech recognition.
+export function voiceDownloadCard({ study = false } = {}) {
+  if (!packById("voice")) return null;
+  return h("section", { class: "card voice-download", "aria-label": t("models.voiceOnlyTitle") },
+    h("h2", { class: "sec-title" }, t("models.voiceOnlyTitle")),
+    h("p", { class: "hint-line" }, t("models.voiceOnlyNote")),
+    h("ul", { class: "pack-list" }, packRow("voice", { key: "voice" }, recommended(), activePacks())),
+    study ? h("button", { type: "button", class: "btn", onclick: () => setTab("vocab") }, t("models.studyWithoutModels")) : null);
 }
 
 function packRow(group, sec, rec, active) {

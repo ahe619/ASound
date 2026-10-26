@@ -34,7 +34,7 @@ jobs:
       - name: JavaScript regression tests
         run: node --test tests/*.mjs
       - name: Build and verify the small-model website release
-        run: python tools/prepare_soundoa_site.py
+        run: python tools/prepare_soundoa_site.py --download-web-voice
       - name: Upload only the web release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3

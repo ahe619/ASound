@@ -1,7 +1,8 @@
 """Prepare an auditable GitHub Pages release for soundoa.cn, without publishing it.
 
 Run from the repository root: python tools/prepare_soundoa_site.py
-No network calls, repository creation, DNS changes, or model downloads are made.
+By default no network calls, repository creation, DNS changes, or model downloads are made.
+With --download-web-voice, only missing pinned browser voice files are fetched.
 """
 
 import argparse
@@ -17,9 +18,11 @@ import zipfile
 try:
     from .build_web import build, MARKER as WEB_MARKER, RELEASE_LINE, ASSETS_LINE, encode
     from .prepare_model_host import DEFAULT_PACKS
+    from .prepare_web_voice import verify_voice_payload
 except ImportError:  # Direct script execution: tools/ is on sys.path.
     from build_web import build, MARKER as WEB_MARKER, RELEASE_LINE, ASSETS_LINE, encode
     from prepare_model_host import DEFAULT_PACKS
+    from prepare_web_voice import verify_voice_payload
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +32,7 @@ MARKER_TEXT = "ASound generated release preparation v1\n"
 DOMAIN = "soundoa.cn"
 REPOSITORY = "ahe619/ASound"
 OWNED_RECEIPTS = {(REPOSITORY, "existing"), ("ahe619/soundoa-site", "planned")}
-ROOT_ASSETS = {"index.html", "manifest.webmanifest", "packs.json", "LICENSES.md", "version.json"}
+ROOT_ASSETS = {"index.html", "manifest.webmanifest", "packs.json", "LICENSES.md", "version.json", "voice-models.json"}
 EXTENSIONS = {
     "css": {".css"}, "fonts": {".woff2", ".woff", ".ttf", ".txt", ".md"},
     "img": {".png", ".svg", ".ico", ".webp", ".jpg", ".jpeg"},
@@ -190,8 +193,9 @@ def verify_site(site):
         if sha256(target) != asset["sha256"]:
             raise ValueError(f"Public asset hash mismatch: {name}")
         names.add(name)
+    optional = verify_voice_payload(site, json.loads((site / "packs.json").read_text(encoding="utf-8")))
     actual = {p.relative_to(site).as_posix() for p in site.rglob("*") if p.is_file()}
-    if actual != names | {"sw.js", ".nojekyll", WEB_MARKER}:
+    if actual != names | optional | {"sw.js", ".nojekyll", WEB_MARKER}:
         raise ValueError("Website contains files outside its verified release")
     releases = re.findall(r"^const RELEASE = (.+); // @asound-release$", worker, re.M)
     if len(releases) != 1:
@@ -212,6 +216,7 @@ def verify_site(site):
 def publication_files(directory):
     """Only these paths may enter a portable prebuilt website bundle."""
     allowed_controls = {"README.md", ".gitignore", ".github/workflows/pages.yml"}
+    optional = verify_voice_payload(directory / "site", json.loads((directory / "site" / "packs.json").read_text(encoding="utf-8")))
     for path in sorted(directory.rglob("*")):
         if path.is_symlink() or getattr(path, "is_junction", lambda: False)() or not path.resolve().is_relative_to(directory.resolve()):
             raise ValueError(f"Linked publication content: {path}")
@@ -222,7 +227,7 @@ def publication_files(directory):
             continue
         if relative in allowed_controls:
             yield relative, path
-        elif relative.startswith("site/") and (allowed_asset(relative[5:]) or relative[5:] in {"sw.js", ".nojekyll"}):
+        elif relative.startswith("site/") and (allowed_asset(relative[5:]) or relative[5:] in optional | {"sw.js", ".nojekyll"}):
             yield relative, path
         else:
             raise ValueError(f"Unexpected publication content: {relative}")
@@ -268,7 +273,8 @@ def replace_outputs(items):
             remove_generated(backup, marker)
 
 
-def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None):
+def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None,
+            with_web_voice=False, download_web_voice=False):
     root = checked_path(project_root)
     source = checked_path(root / "app")
     license_file = checked_path(root / "LICENSES.md")
@@ -297,12 +303,18 @@ def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None)
     (staged_site / SITE_MARKER).write_text(MARKER_TEXT, encoding="utf-8")
     (staged_notes / NOTES_MARKER).write_text(MARKER_TEXT, encoding="utf-8")
     try:
-        built = build(source, staged_site / "site", version, license_file, model_packs=list(DEFAULT_PACKS))
+        built = build(source, staged_site / "site", version, license_file, model_packs=list(DEFAULT_PACKS),
+                      with_web_voice=with_web_voice or download_web_voice, download_web_voice=download_web_voice)
         assets = verify_site(staged_site / "site")
         workflow = staged_site / ".github" / "workflows" / "pages.yml"
         workflow.parent.mkdir(parents=True)
         workflow.write_text(PAGES_WORKFLOW, encoding="utf-8", newline="\n")
-        (staged_site / "README.md").write_text(PUBLIC_README, encoding="utf-8", newline="\n")
+        readme = PUBLIC_README
+        instructions = INSTRUCTIONS
+        if built["optionalVoiceFiles"]:
+            readme = readme.replace("model weights, and user data are not part of this bundle.", "user data, and conversation-model weights are not part of this bundle.\nThe pinned Kokoro q8 browser voice pack is hosted under voice-models/ as an optional\ndownload; it is not downloaded with normal webpage updates. Its exact sources and\nhashes are listed in site/voice-models.json; attribution and the complete Apache-2.0\nlicense are in site/kokoro/KOKORO-MODEL-LICENSE.txt.")
+            instructions = instructions.replace("本包不含模型权重。首次 AI 使用需要下载模型，下载源和真实手机性能仍待试用。", "本包含已核验的 Kokoro q8 浏览器语音包（约 101 MB），通过网站按需下载，不随网页更新自动下载。\nsite/voice-models.json 列出固定来源和文件校验值；完整许可证在 site/kokoro/KOKORO-MODEL-LICENSE.txt。\n对话和识别模型仍使用各自的下载源。下载速度和真实手机性能仍待试用。")
+        (staged_site / "README.md").write_text(readme, encoding="utf-8", newline="\n")
         (staged_site / ".gitignore").write_text(f"{SITE_MARKER}\nsite/{WEB_MARKER}\n", encoding="utf-8", newline="\n")
         public_files = list(publication_files(staged_site))
         receipt = {
@@ -310,7 +322,8 @@ def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None)
             "repository": REPOSITORY, "repositoryStatus": "existing",
             "statusScope": "local_preparation_only",
             "published": False, "dnsConfigured": False, "customDomainConfigured": False,
-            "httpsVerified": False, "weightsIncluded": False,
+            "httpsVerified": False, "weightsIncluded": bool(built["optionalVoiceFiles"]),
+            "optionalVoiceFiles": built["optionalVoiceFiles"],
             "release": built["version"], "appVersion": version,
             "serviceWorkerSha256": sha256(staged_site / "site" / "sw.js"),
             "verifiedAssets": len(assets), "files": len(public_files),
@@ -319,7 +332,7 @@ def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None)
             "realPhoneInferenceTested": False,
         }
         (staged_notes / "launch-status.json").write_text(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        (staged_notes / "README.txt").write_text(INSTRUCTIONS, encoding="utf-8")
+        (staged_notes / "README.txt").write_text(instructions, encoding="utf-8")
         guide = root / "docs" / "SOUNDOA_LAUNCH.md"
         if guide.is_file():
             if checked_path(guide) != guide or not guide.resolve().is_relative_to(root):
@@ -345,11 +358,13 @@ def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=ROOT / "dist" / "soundoa-site")
+    parser.add_argument("--with-web-voice", action="store_true", help="Host the verified Kokoro q8 pack as an optional browser download")
+    parser.add_argument("--download-web-voice", action="store_true", help="Fetch missing pinned voice files before building (implies --with-web-voice)")
     args = parser.parse_args()
-    result = prepare(output=args.out)
+    result = prepare(output=args.out, with_web_voice=args.with_web_voice, download_web_voice=args.download_web_voice)
     print(f"{result['release']}: {result['verifiedAssets']} verified website assets -> {result['output']}")
     print(f"{result['archive']} ({result['archiveBytes'] / 1_000_000:.1f} MB)")
-    print("Prepared only: repository not created, website not published, DNS not changed, model weights not included.")
+    print(f"Prepared only: website not published, DNS not changed; {result['optionalVoiceFiles']} verified optional browser voice files.")
 
 
 if __name__ == "__main__":

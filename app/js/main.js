@@ -16,6 +16,7 @@ import { initUpdates } from "./updates.js";
 import { startEngines } from "./engines.js";
 import { showModels, renderModels } from "./models.js";
 import { initModes } from "./modes.js";
+import { initLayout } from "./device.js";
 
 function syncLabels() {
   if (window.ASoundAI) window.ASoundAI.setLabels({ loading: t("llm.loading"), error: t("llm.error"), noGpu: t("llm.noGpu") });
@@ -33,6 +34,7 @@ function renderAll() {
 }
 
 async function boot() {
+  initLayout();
   await Promise.all([setLanguage(prefs.uiLang), initModes()]);
   syncLabels();
   registerTab("talk", () => { if (state.talkView === "home") renderTalkHome(); });

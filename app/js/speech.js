@@ -1,4 +1,4 @@
-// Speech output. Engines, best first:
+// Speech output. Only installed/configured engines are eligible:
 //   natural - Chatterbox on an NVIDIA GPU through the local server (optional; most human-sounding, slower)
 //   native  - Kokoro through kokoro-onnx in the local server (POST /api/tts): fast, all CPU threads
 //   browser - Kokoro in the page (kokoro/neural-tts.js, 8-bit on WebAssembly): slower fallback
@@ -6,6 +6,7 @@
 import { prefs } from "./state.js";
 import { h, icon, str, sentences, clamp } from "./util.js";
 import { t } from "./i18n.js";
+import { deviceInfo } from "./device.js";
 
 // Measured median pitch (Hz) of each voice, from tools/voice_pitch.py.
 export const VOICES = [
@@ -42,6 +43,7 @@ export const speechStatus = () => ({ ...status });
 
 const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
 let systemVoices = [];
+let systemVoicesPending = true;
 let audioCtx = null;
 let active = [];          // playing AudioBufferSourceNodes
 let seq = 0;
@@ -49,35 +51,87 @@ let speakingBtn = null;
 let unlocked = false;
 const nativeCache = new Map();
 let browserMod = null;
+let voiceConfig = null;
+
+// A display mode does not change device capabilities. WebAssembly works without CUDA.
+export function speechEngineOrder({ preference = "auto", mobile = false, native = false,
+  browser = false, system = false, natural = "absent" } = {}) {
+  if (preference === "system") return system ? ["system"] : [];
+  const standard = (mobile ? ["browser", "native"] : ["native", "browser"])
+    .filter(engine => engine === "native" ? native : browser);
+  if (system) standard.push("system");
+  if (preference === "natural" && native && natural === "ready") standard.unshift("natural");
+  return standard;
+}
+
+export function voiceCapabilities() {
+  const mobile = deviceInfo().mobile;
+  const system = !!synth && (systemVoices.length > 0 || systemVoicesPending);
+  const native = status.native === true;
+  const browser = !!voiceConfig;
+  const natural = native && ["off", "loading", "ready"].includes(status.natural);
+  return {
+    mobile, system, systemEnglish: systemVoices.length > 0, systemPending: !!synth && systemVoicesPending,
+    native, browser, natural, canNatural: natural,
+    effective: speechEngineOrder({ preference: prefs.voiceEngine, mobile, native, browser, system, natural: status.natural })[0] || "",
+  };
+}
 
 const FORCE_WEB = new URLSearchParams(location.search).has("web"); // try the phone path on a computer
-function readHealth() {
-  if (FORCE_WEB) { status.native = false; emit(); return Promise.resolve(); }
-  return fetch("api/health", { cache: "no-store" })
-    .then((r) => r.json())
-    .then((j) => { status.native = !!j.tts; status.natural = j.natural || "absent"; })
-    .catch(() => { status.native = false; })
-    .finally(emit);
+async function requestHealth(path = "api/health", options = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const response = await fetch(path, { cache: "no-store", ...options, signal: ctl.signal });
+    if (!response.ok) throw new Error(`voice service ${response.status}`);
+    return await response.json();
+  } finally { clearTimeout(timer); }
+}
+async function readHealth() {
+  try {
+    if (FORCE_WEB) throw new Error("browser-only mode");
+    const health = await requestHealth();
+    status.native = health.tts === true;
+    status.natural = status.native && ["off", "loading", "ready"].includes(health.natural) ? health.natural : "absent";
+  } catch {
+    status.native = false;
+    status.natural = "absent";
+  } finally { emit(); }
 }
 const healthCheck = readHealth();
 export const recheckSpeech = () => readHealth(); // after a voice pack was downloaded or removed
 
 // Start the natural voice service and keep the status fresh until it is ready (it takes ~30 s the first time).
-let naturalPoll = 0;
-export function startNatural() {
-  if (status.natural === "absent" || status.natural === "ready") return;
-  fetch("api/natural/start", { method: "POST" }).then(readHealth).catch(() => {});
-  clearInterval(naturalPoll);
-  naturalPoll = setInterval(async () => {
-    await readHealth();
-    if (status.natural === "ready" || status.natural === "absent") clearInterval(naturalPoll);
-  }, 3000);
+let naturalStarting = false;
+export async function startNatural() {
+  if (naturalStarting || !voiceCapabilities().canNatural || status.natural === "ready") return;
+  naturalStarting = true;
+  try {
+    if (status.natural !== "loading") await requestHealth("api/natural/start", { method: "POST" });
+    // Bound retries, and keep only one health request in flight at a time.
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await readHealth();
+      if (["ready", "absent"].includes(status.natural)) return;
+      if (prefs.voiceEngine !== "natural") return;
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    throw new Error("natural voice did not become ready");
+  } catch (error) {
+    status.natural = "error";
+    status.error = str(error?.message);
+    emit();
+  } finally { naturalStarting = false; }
 }
 healthCheck.then(() => { if (prefs.voiceEngine === "natural") startNatural(); });
 
 function loadSystemVoices() {
   if (!synth) return;
-  try { systemVoices = synth.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang)); } catch { systemVoices = []; }
+  try {
+    const voices = synth.getVoices();
+    systemVoicesPending = !voices.length;
+    systemVoices = voices.filter((v) => /^en([-_]|$)/i.test(v.lang));
+  } catch { systemVoices = []; systemVoicesPending = true; }
+  emit();
 }
 if (synth) {
   loadSystemVoices();
@@ -132,8 +186,10 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
   paintSpeak(btn, true);
   const rate = clamp(prefs.rate * rateMul, 0.5, 1.6);
   const voice = voiceId || prefs.voice;
+  let finished = false;
   const done = () => {
-    if (mine !== seq) return;
+    if (mine !== seq || finished) return;
+    finished = true;
     paintSpeak(speakingBtn, false);
     speakingBtn = null;
     active = [];
@@ -144,19 +200,20 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
 }
 
 async function route(text, mine, rate, voice, done) {
-  if (status.native === null) await healthCheck;
+  // System speech can start immediately even if a static host's health check is pending.
+  if (prefs.voiceEngine !== "system" && status.native === null) await healthCheck;
   if (mine !== seq) return;
-  const order = status.native ? ["native", "browser", "system"] : ["browser", "system"];
-  if (status.native && prefs.voiceEngine === "natural") {
-    if (status.natural === "ready") order.unshift("natural");
-    else startNatural();
-  }
+  loadSystemVoices();
+  const capabilities = voiceCapabilities();
+  const order = speechEngineOrder({ ...capabilities, preference: prefs.voiceEngine, natural: status.natural });
+  if (capabilities.canNatural && prefs.voiceEngine === "natural" && status.natural !== "ready") startNatural();
+  status.error = "";
   for (const engine of order) {
     try {
       if (engine === "natural") await playAudio(text, mine, rate, voice, done, naturalChunk);
       else if (engine === "native") await playAudio(text, mine, rate, voice, done, nativeChunk);
       else if (engine === "browser") await playAudio(text, mine, rate, voice, done, browserChunk);
-      else if (engine === "system") { if (!systemVoices.length && !synth) throw new Error("no system voice"); playSystem(text, mine, rate, done); }
+      else if (engine === "system") playSystem(text, mine, rate, done);
       if (status.engine !== engine) { status.engine = engine; emit(); }
       return;
     } catch (e) {
@@ -165,6 +222,9 @@ async function route(text, mine, rate, voice, done) {
       status.error = str(e && e.message);
     }
   }
+  if (!order.length) status.error = t(prefs.voiceEngine === "system" ? "speech.noEnglishVoice" : "speech.voicePackRequired");
+  status.engine = "";
+  emit();
   done();
 }
 
@@ -198,13 +258,15 @@ async function naturalChunk(text, rate, voice) {
 }
 
 // Where the in-page voice finds its files (js/packs.js engineConfig): this computer, or the download cache.
-let voiceConfig = null;
 export function configureVoice(cfg) {
-  voiceConfig = cfg;
-  if (browserMod && browserMod.configure) browserMod.configure(cfg);
+  voiceConfig = cfg || null;
+  if (browserMod && browserMod.configure && cfg) browserMod.configure(cfg);
+  if (!cfg) status.browser = "off";
+  emit();
 }
 
 async function browserChunk(text, rate, voice) {
+  if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
   if (!browserMod) {
     browserMod = await import("../kokoro/neural-tts.js");
     if (voiceConfig && browserMod.configure) browserMod.configure(voiceConfig);
@@ -242,6 +304,7 @@ async function playAudio(text, mine, rate, voice, done, chunk) {
 }
 
 function playSystem(text, mine, rate, done) {
+  if (!synth || (!systemVoices.length && !systemVoicesPending)) throw new Error(t("speech.noEnglishVoice"));
   const voice = systemVoices.find((v) => /^en[-_]us/i.test(v.lang)) || systemVoices[0] || null;
   setTimeout(() => {
     if (mine !== seq) return;
@@ -250,7 +313,14 @@ function playSystem(text, mine, rate, done) {
       const u = new SpeechSynthesisUtterance(p);
       if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = "en-US";
       u.rate = rate;
-      u.onerror = done;
+      u.onerror = () => {
+        if (mine !== seq) return;
+        synth.cancel();
+        status.engine = "";
+        status.error = t("speech.noEnglishVoice");
+        emit();
+        done();
+      };
       if (i === parts.length - 1) u.onend = done;
       synth.speak(u);
     });
@@ -277,6 +347,7 @@ export async function renderSpeech(text, { voice = prefs.voice, rate = prefs.rat
   if (status.native === null) await healthCheck;
   const r = clamp(rate, 0.5, 1.6);
   const native = !!status.native;
+  if (!native && !voiceConfig) throw new Error(t("speech.voicePackRequired"));
   const parts = native && clean.length <= 600 ? [clean] : sentences(clean);
   const bufs = [];
   for (const p of parts) {
@@ -300,5 +371,9 @@ export const audioContext = () => ctx();
 
 // Warm the native engine so the first sentence is quick.
 export function warmUp() {
-  healthCheck.then(() => { if (status.native) nativeChunk("Hi.", clamp(prefs.rate, 0.5, 1.6), prefs.voice).catch(() => {}); });
+  healthCheck.then(() => {
+    if (prefs.voiceEngine !== "system" && voiceCapabilities().effective === "native") {
+      nativeChunk("Hi.", clamp(prefs.rate, 0.5, 1.6), prefs.voice).catch(() => {});
+    }
+  });
 }

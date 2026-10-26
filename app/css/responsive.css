@@ -1,0 +1,100 @@
+/* Layout modes control presentation only; device capabilities are detected separately. */
+:root { --page-width: 1024px; }
+:root[data-layout="tablet"] { --page-width: 820px; }
+:root[data-layout="phone"] { --page-width: 480px; }
+html, body { width: 100%; min-width: 0; }
+body { height: 100dvh; height: var(--app-viewport-height, 100dvh); }
+.app { min-width: 0; }
+.wrap { max-width: var(--page-width); }
+.topbar { padding-top: env(safe-area-inset-top, 0px); }
+.view { min-width: 0; overscroll-behavior-y: contain; }
+.view > .wrap { padding-bottom: calc(36px + env(safe-area-inset-bottom, 0px)); }
+.composer .wrap { padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)); }
+.sheet-panel { overscroll-behavior: contain; max-width: min(540px, 100%); }
+.row > *, .start-row > *, .pack-main, .mode-text, .engine-list span { min-width: 0; }
+.lede, .hint-line, .note-card, .pack-error, .engine-list, .word, .expr-main { overflow-wrap: anywhere; }
+.license { white-space: normal; }
+.grid { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
+.mode-grid { grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
+.word-inputs { grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr)); }
+.scores { grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); }
+.field, .sheet select, input, textarea { max-width: 100%; }
+.tab, .btn, .seg button { min-height: 44px; }
+.btn { white-space: normal; text-align: center; }
+.sheet-head { gap: 12px; }
+.engine-list li { flex-wrap: wrap; }
+.layout-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.layout-controls button { min-width: 0; padding-inline: 6px; }
+
+/* Coarse pointers need the same touch targets on tablets and wide phones. */
+@media (pointer: coarse) {
+  .icon-btn, .icon-btn.sm { width: 44px; height: 44px; }
+  .mini, .word-study .ws-chip { min-height: 44px; }
+  input:not([type="checkbox"]):not([type="range"]), textarea, select { font-size: max(16px, 1em); }
+  .sheet select, input[type="date"] { min-height: 44px; }
+  .check { min-height: 44px; }
+}
+
+/* A phone preview on a large monitor uses these rules too. */
+:root[data-layout="phone"] .topbar .wrap { flex-wrap: wrap; gap: 0 8px; padding-top: 8px; }
+:root[data-layout="phone"] .brand { min-height: 44px; }
+:root[data-layout="phone"] .brand-name { display: inline; }
+:root[data-layout="phone"] #settings-open { margin-left: auto; width: 44px; height: 44px; }
+:root[data-layout="phone"] .tabs { order: 3; width: 100%; margin-left: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+:root[data-layout="phone"] .tab { justify-content: center; min-width: 0; padding: 9px 3px; white-space: normal; font-size: 14px; }
+:root[data-layout="phone"] .view > .wrap { padding-top: 18px; }
+:root[data-layout="phone"] .stack { gap: 22px; }
+:root[data-layout="phone"] .pack { flex-direction: column; }
+:root[data-layout="phone"] .pack-actions { align-self: stretch; flex-wrap: wrap; }
+:root[data-layout="phone"] .pack-actions .btn { flex: 1; }
+:root[data-layout="phone"] .chat-head .wrap { flex-wrap: wrap; gap: 6px; padding-block: 6px; }
+:root[data-layout="phone"] .chat-title { flex: 1 1 100%; }
+:root[data-layout="phone"] .composer-row { flex-wrap: wrap; gap: 5px; align-items: center; }
+:root[data-layout="phone"] .composer textarea { flex: 1 1 calc(100% - 60px); order: -2; }
+:root[data-layout="phone"] .composer .send { order: -1; width: 50px; padding-inline: 10px; }
+:root[data-layout="phone"] .voice-note { flex: 1; }
+:root[data-layout="phone"] .sheet-panel { max-width: 480px; }
+:root[data-layout="phone"] .ws-decks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+:root[data-layout="phone"] .ws-chip { min-height: 44px; }
+:root[data-layout="phone"] .icon-btn, :root[data-layout="phone"] .icon-btn.sm { width: 44px; height: 44px; }
+:root[data-layout="phone"] .ws-intro .title { font-size: 25px; }
+:root[data-layout="phone"] .ws-mark { min-width: 55px; height: 55px; font-size: 25px; }
+:root[data-layout="phone"] .ws-flashcard { min-height: 280px; padding: 24px 16px; }
+
+/* Viewport safety always wins, even if desktop mode was chosen on a phone. */
+@media (max-width: 600px) {
+  .topbar .wrap { flex-wrap: wrap; gap: 0 8px; padding-top: 8px; }
+  .brand { min-height: 44px; }
+  .brand-name { display: inline; }
+  #settings-open { margin-left: auto; width: 44px; height: 44px; }
+  .tabs { order: 3; width: 100%; margin-left: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tab { justify-content: center; min-width: 0; padding: 9px 3px; white-space: normal; font-size: 14px; }
+  .view > .wrap { padding-top: 18px; }
+  .stack { gap: 22px; }
+  .pack { flex-direction: column; }
+  .pack-actions { align-self: stretch; flex-wrap: wrap; }
+  .pack-actions .btn { flex: 1; }
+  .chat-head .wrap { flex-wrap: wrap; gap: 6px; padding-block: 6px; }
+  .chat-title { flex: 1 1 100%; }
+  .composer-row { flex-wrap: wrap; gap: 5px; align-items: center; }
+  .composer textarea { flex: 1 1 calc(100% - 60px); order: -2; }
+  .composer .send { order: -1; width: 50px; padding-inline: 10px; }
+  .voice-note { flex: 1; }
+  .sheet { align-items: flex-end; }
+  .sheet-panel { max-height: 94%; border-radius: 18px 18px 0 0; }
+  .word-study .ws-decks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .word-study .ws-chip, .mini { min-height: 44px; }
+  .icon-btn, .icon-btn.sm { width: 44px; height: 44px; }
+  input:not([type="checkbox"]):not([type="range"]), textarea, select { font-size: max(16px, 1em); }
+  .sheet select, input[type="date"] { min-height: 44px; }
+  .word-study .ws-intro .title { font-size: 25px; }
+  .word-study .ws-mark { min-width: 55px; height: 55px; font-size: 25px; }
+  .word-study .ws-flashcard { min-height: 280px; padding: 24px 16px; }
+  .word-study .ws-study-head, .word-study .ws-filter-title, .vocab-head { flex-wrap: wrap; }
+  .voice-pill { bottom: calc(8px + env(safe-area-inset-bottom, 0px)); max-width: calc(50% - 18px); border-radius: 10px; overflow-wrap: anywhere; }
+  .voice-pill .meter { display: none; }
+}
+@media (max-height: 480px) {
+  .sheet-panel { max-height: 100%; border-radius: 0; }
+  .topbar .wrap { padding-top: 0; }
+}

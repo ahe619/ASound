@@ -14,6 +14,7 @@ export async function applyEngines() {
     window.ASoundMic.configure({ model: c.asr.model, mode: c.mode, base: c.base, cache: c.cache, canon: c.canon, gpu: a.asr === "asr-base" });
   }
   if (a.voice) { configureVoice(await engineConfig("voice")); recheckSpeech(); }
+  else configureVoice(null);
   if (a.helpAsr && window.ASoundMic) {
     const c = await engineConfig("help-asr");
     window.ASoundMic.configureHelp({ model: c.asr.model, mode: c.mode, base: c.base, cache: c.cache, canon: c.canon, gpu: false });

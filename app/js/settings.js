@@ -3,15 +3,17 @@ import { prefs, savePrefs } from "./state.js";
 import { $, h, fill, icon, toast } from "./util.js";
 import { t, setLanguage, UI_LANGS } from "./i18n.js";
 import { HELP_LANGS } from "./langs.js";
-import { speak, unlockAudio, speechStatus, onSpeechStatus, startNatural } from "./speech.js";
+import { speak, speakBtn, unlockAudio, speechStatus, onSpeechStatus, startNatural, voiceCapabilities, stopSpeaking } from "./speech.js";
 import { aiStatus } from "./ai.js";
 import { voicePicker } from "./widgets.js";
-import { activePacks, packById, variant } from "./packs.js";
-import { showModels } from "./models.js";
+import { activePacks, packById, packStatus, variant, onPacks } from "./packs.js";
+import { showModels, voiceDownloadCard } from "./models.js";
+import { getLayoutMode, setLayoutMode, layoutInfo, onLayoutChange } from "./device.js";
 import { updateStatus, onUpdateStatus, checkForUpdates, applyUpdate } from "./updates.js";
 
 let onLanguageChange = null;
 let announcedVersion = "";
+let voiceSignature = "";
 export function initSettings({ languageChanged }) {
   onLanguageChange = languageChanged;
   $("#settings-open").append(icon("gear"));
@@ -19,6 +21,8 @@ export function initSettings({ languageChanged }) {
   $("#settings").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeSettings(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#settings").hidden) closeSettings(); });
   onSpeechStatus(() => { if (!$("#settings").hidden) paintEngines(); });
+  onPacks(() => { if (!$("#settings").hidden) paintEngines(); });
+  onLayoutChange(paintLayout);
   if (window.ASoundMic) window.ASoundMic.onStatus(() => { if (!$("#settings").hidden) paintEngines(); });
   onUpdateStatus((status) => {
     paintUpdates();
@@ -54,6 +58,7 @@ function seg(options, current, onPick) {
 }
 
 function render() {
+  voiceSignature = "";
   const rateOut = h("output", { for: "rate" }, `${prefs.rate.toFixed(2)}\u00d7`);
   const rate = h("input", { type: "range", id: "rate", min: "0.6", max: "1.3", step: "0.05" });
   rate.value = String(prefs.rate);
@@ -67,6 +72,10 @@ function render() {
     h("div", { class: "sheet-head" }, h("h2", { id: "settings-title" }, t("settings.title")),
       h("button", { type: "button", class: "icon-btn", id: "settings-close", "aria-label": t("settings.close"), onclick: closeSettings }, icon("close"))),
     h("div", { class: "stack-xs" },
+      h("label", { class: "field-label", for: "layout-mode" }, t("settings.layout")),
+      select("layout-mode", ["auto", "phone", "tablet", "desktop"].map(id => [id, t(`settings.layout.${id}`)]), getLayoutMode(), setLayoutMode),
+      h("p", { class: "hint-line", id: "layout-status" })),
+    h("div", { class: "stack-xs" },
       h("label", { class: "field-label", for: "ui-lang" }, t("settings.uiLang")),
       select("ui-lang", UI_LANGS, prefs.uiLang, async (id) => {
         prefs.uiLang = id;
@@ -79,19 +88,7 @@ function render() {
       h("label", { class: "field-label", for: "help-lang" }, t("settings.helpLang")),
       select("help-lang", HELP_LANGS.map((l) => [l.id, l.label]), prefs.helpLang, (id) => { prefs.helpLang = id; savePrefs(); }),
       h("p", { class: "hint-line" }, t("settings.helpLangNote"))),
-    h("div", { class: "stack-xs" },
-      h("span", { class: "field-label" }, t("settings.voiceStyle")),
-      seg([["standard", t("settings.voiceStyle.standard")], ["natural", t("settings.voiceStyle.natural")]], prefs.voiceEngine, (id) => {
-        prefs.voiceEngine = id;
-        savePrefs();
-        if (id === "natural") startNatural();
-        paintNatural();
-      }),
-      h("p", { class: "hint-line", id: "natural-status" })),
-    h("div", { class: "stack-xs" },
-      h("span", { class: "field-label" }, t("settings.voice")),
-      voicePicker(),
-      h("p", { class: "hint-line" }, t("settings.voiceNote"))),
+    h("section", { class: "stack-sm", id: "voice-options" }),
     h("div", { class: "stack-xs" },
       h("label", { class: "field-label", for: "rate" }, t("settings.rate"), " ", rateOut),
       rate),
@@ -107,8 +104,48 @@ function render() {
     h("section", { class: "stack-xs", id: "app-updates", "aria-live": "polite" }),
     h("p", { class: "hint-line" }, t("settings.licenses")));
   paintEngines();
-  paintNatural();
+  paintLayout();
   paintUpdates();
+}
+
+function paintLayout() {
+  const el = $("#layout-status");
+  if (el) el.textContent = t("settings.layout.note", { layout: t(`settings.layout.${layoutInfo().layout}`) });
+  const select = $("#layout-mode");
+  if (select) select.value = getLayoutMode();
+}
+
+function paintVoiceOptions() {
+  const el = $("#voice-options");
+  if (!el) return;
+  const cap = voiceCapabilities();
+  const pack = packStatus("voice");
+  const next = JSON.stringify([cap.browser, cap.native, cap.canNatural, cap.system, cap.systemEnglish,
+    prefs.voiceEngine, pack.state, pack.done, pack.error]);
+  if (next === voiceSignature) return;
+  voiceSignature = next;
+  const options = [["auto", t("settings.voiceStyle.auto")], ["standard", t("settings.voiceStyle.standard")]];
+  if (cap.system || prefs.voiceEngine === "system") options.push(["system", t("settings.voiceStyle.system")]);
+  if (cap.canNatural) options.push(["natural", t("settings.voiceStyle.natural")]);
+  const selected = options.some(([id]) => id === prefs.voiceEngine) ? prefs.voiceEngine : "auto";
+  const useSystem = selected === "system" || (!cap.browser && !cap.native && !cap.canNatural);
+  const sample = speakBtn("Hello! Let's practice English together.", t("voice.preview"), t("voice.preview"));
+  sample.disabled = !cap.effective;
+  fill(el,
+    h("span", { class: "field-label" }, t("settings.voiceStyle")),
+    seg(options, selected, id => {
+      stopSpeaking();
+      prefs.voiceEngine = id; savePrefs();
+      if (id === "natural") startNatural();
+      paintVoiceOptions(); paintNatural();
+    }),
+    h("p", { class: "hint-line", id: "natural-status" }),
+    voiceDownloadCard(),
+    useSystem ? h("p", { class: "hint-line" }, t(cap.system ? "settings.systemVoiceNote" : selected === "system" ? "settings.systemVoiceUnavailable" : "settings.noVoice")) :
+      h("details", null,
+        h("summary", { class: "field-label" }, t("settings.voice")),
+        voicePicker(), h("p", { class: "hint-line" }, t("settings.voiceNote"))),
+    sample);
 }
 
 function paintUpdates() {
@@ -140,10 +177,13 @@ function paintNatural() {
   const el = $("#natural-status");
   if (!el) return;
   const st = speechStatus().natural;
-  el.textContent = prefs.voiceEngine === "natural" ? t(`natural.${st}`) : t("settings.voiceStyle.note");
+  const cap = voiceCapabilities();
+  el.textContent = prefs.voiceEngine === "natural" && cap.canNatural ? t(`natural.${st}`)
+    : t("settings.voiceStyle.note");
 }
 
 function paintEngines() {
+  paintVoiceOptions();
   paintNatural();
   const list = $("#engine-list");
   if (!list) return;
@@ -151,12 +191,14 @@ function paintEngines() {
   const sp = speechStatus();
   const mic = window.ASoundMic ? window.ASoundMic.status() : { asr: "off" };
   const aiText = ai.state === "ready" ? t("engine.ready") : ai.state === "loading" ? t("engine.loading", { pct: Math.floor((ai.progress || 0) * 100) }) : ai.state === "error" ? t("engine.error", { error: ai.error }) : t("engine.idle");
-  const spText = sp.native ? t("engine.voiceNative") : sp.native === false ? t("engine.voiceBrowser") : t("engine.idle");
+  const cap = voiceCapabilities();
+  const spText = cap.effective === "system" ? t("engine.voiceSystem") : cap.effective === "native" ? t("engine.voiceNative")
+    : cap.effective === "natural" ? t("natural.ready") : cap.browser ? t("engine.voiceBrowser") : t("engine.none");
   const asrText = mic.asr === "ready" ? t("engine.ready") : mic.asr === "loading" ? t("engine.loadingShort") : mic.asr === "error" ? t("engine.error", { error: mic.error }) : t("engine.idle");
   const a = activePacks();
   const name = (g) => (g && packById(variant(g)) ? packById(variant(g)).name : t("engine.none"));
   fill(list,
     h("li", null, h("b", null, t("engine.llm")), h("span", null, `${name(a.llm)} \u00b7 ${aiText}`)),
-    h("li", null, h("b", null, t("engine.voice")), h("span", null, `Kokoro-82M \u00b7 ${spText}`)),
+    h("li", null, h("b", null, t("engine.voice")), h("span", null, spText)),
     h("li", null, h("b", null, t("engine.asr")), h("span", null, `${name(a.asr)} \u00b7 ${asrText}`)));
 }
