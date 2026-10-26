@@ -1,0 +1,4 @@
+// ASound for Android: a thin WebView shell around the same app/ folder the desktop version serves.
+plugins {
+    id "com.android.application" version "8.7.3" apply false
+}

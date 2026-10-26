@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ASound">
+  <!-- ASound mark: an orange A whose legs flow into the two posts of an H. Both posts keep rising past the roof
+       as small white antennas sending out a signal; the H crossbar is a white sound wave. Symmetric. -->
+  <rect width="512" height="512" rx="116" fill="#0021A5"/>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round">
+    <path d="M146 262 V130 M366 262 V130" stroke-width="26"/>
+    <path d="M135.6 69.4 A40 40 0 0 0 107.4 97.6 M128.9 44.3 A66 66 0 0 0 82.2 90.9" stroke-width="13" opacity="0.9"/>
+    <path d="M376.4 69.4 A40 40 0 0 1 404.6 97.6 M383.1 44.3 A66 66 0 0 1 429.8 90.9" stroke-width="13" opacity="0.9"/>
+  </g>
+  <circle cx="146" cy="108" r="19" fill="#FFFFFF"/>
+  <circle cx="366" cy="108" r="19" fill="#FFFFFF"/>
+  <path d="M146 430 V262 L256 122 L366 262 V430" fill="none" stroke="#FA4616" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#FFFFFF">
+    <rect x="178" y="323" width="20" height="40" rx="10"/>
+    <rect x="212" y="299" width="20" height="88" rx="10"/>
+    <rect x="246" y="279" width="20" height="128" rx="10"/>
+    <rect x="280" y="299" width="20" height="88" rx="10"/>
+    <rect x="314" y="323" width="20" height="40" rx="10"/>
+  </g>
+</svg>

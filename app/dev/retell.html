@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<base href="/">
+<title>ASound dev: Shrinking Retell</title>
+<script>
+  // voice-input.js, local-ai.js and packs.js resolve their workers and models against location.href (not the
+  // <base>), so this test page pretends to sit at the app root. A reload therefore opens the main app.
+  history.replaceState(null, "", "/" + location.search + "#dev-retell");
+</script>
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/feat/retell.css">
+<script src="/js/local-ai.js"></script>
+<script src="/js/voice-input.js"></script>
+<script type="module">
+  import { setLanguage, addStrings } from "/js/i18n.js";
+  import { prefs } from "/js/state.js";
+  import { startEngines } from "/js/engines.js";
+  import * as F from "/js/feat-retell.js";
+  window.F = F;
+  window.prefs = prefs;
+  const s = await fetch("/locales/feat/retell.json").then((r) => r.json());
+  addStrings("en", s.en);
+  addStrings("zh", s.zh);
+  await setLanguage(new URLSearchParams(location.search).get("lang") || "en");
+  await startEngines();
+  F.mount(document.querySelector("#root"), { onExit: () => document.body.append("exited") });
+</script>
+</head>
+<body>
+<div class="app">
+  <main class="view"><div class="wrap stack" id="root"></div></main>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

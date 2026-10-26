@@ -1,0 +1,10 @@
+{
+  "name": "asound",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node tools/check_js.mjs",
+    "test": "node --test tests/*.mjs"
+  }
+}

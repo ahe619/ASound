@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ASound</title>
+<link rel="icon" href="img/logo.svg" type="image/svg+xml">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<meta name="theme-color" content="#0021A5">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ASound">
+<meta name="description" content="Practise speaking American English with an AI coach that runs on your device.">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+<script src="js/local-ai.js"></script>
+<script src="js/voice-input.js"></script>
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand"><img class="brand-mark" src="img/logo-mark.svg" alt="" width="34" height="34"><span class="brand-name">ASound</span></div>
+      <nav class="tabs" role="tablist" data-i18n-label="nav.label">
+        <button class="tab" role="tab" id="tab-talk" aria-selected="true" data-i18n="tab.talk"></button>
+        <button class="tab" role="tab" id="tab-accent" aria-selected="false" data-i18n="tab.accent"></button>
+        <button class="tab" role="tab" id="tab-vocab" aria-selected="false"><span data-i18n="tab.vocab"></span><span class="count" id="vocab-count" hidden></span></button>
+        <button class="tab" role="tab" id="tab-me" aria-selected="false" data-i18n="tab.me"></button>
+      </nav>
+      <button class="icon-btn" id="settings-open" type="button" data-i18n-label="settings.open"></button>
+    </div>
+  </header>
+
+  <main class="view" id="view-talk-home"><div class="wrap stack" id="talk-home"></div></main>
+
+  <main class="view chat" id="view-chat" hidden>
+    <div class="chat-head">
+      <div class="wrap">
+        <span class="chat-title" id="chat-title"></span>
+        <span class="level-chip" id="chat-level"></span>
+        <span class="spacer"></span>
+        <button class="btn" id="live-toggle" type="button"></button>
+        <button class="btn" id="end-open" type="button" data-i18n="chat.end"></button>
+      </div>
+    </div>
+    <div class="end-bar" id="end-bar" hidden>
+      <div class="wrap">
+        <span data-i18n="chat.endAsk"></span>
+        <button class="btn primary" id="end-confirm" type="button" data-i18n="chat.endConfirm"></button>
+        <button class="btn quiet" id="end-cancel" type="button" data-i18n="chat.endCancel"></button>
+      </div>
+    </div>
+    <div class="thread-scroll" id="thread-scroll">
+      <div class="wrap">
+        <div class="scene-card" id="scene-card" hidden></div>
+        <ol class="thread" id="thread" aria-live="polite"></ol>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <div class="wrap">
+        <div class="hints" id="hints" hidden></div>
+        <div class="hints native-box" id="native-box" hidden></div>
+        <div class="live-line" id="live-line" hidden></div>
+        <div class="composer-row" id="row-voice">
+          <button type="button" class="icon-btn hint-btn" data-i18n-label="chat.hint"></button>
+          <button type="button" class="icon-btn native-btn" data-i18n-label="chat.native"></button>
+          <button type="button" class="icon-btn" id="mode-type" data-i18n-label="chat.toType"></button>
+          <p class="composer-note voice-note" data-i18n="chat.voiceNote"></p>
+          <span id="voice-mic-slot"></span>
+        </div>
+        <div class="composer-row" id="row-type" hidden>
+          <button type="button" class="icon-btn hint-btn" data-i18n-label="chat.hint"></button>
+          <button type="button" class="icon-btn native-btn" data-i18n-label="chat.native"></button>
+          <button type="button" class="icon-btn" id="mode-voice" data-i18n-label="chat.toVoice"></button>
+          <textarea id="composer-input" rows="1" lang="en" autocomplete="off" spellcheck="false" data-i18n-placeholder="chat.placeholder" data-i18n-label="chat.inputLabel"></textarea>
+          <button type="submit" class="btn primary send" id="send-btn" data-i18n-label="chat.send"></button>
+        </div>
+      </div>
+    </form>
+  </main>
+
+  <main class="view" id="view-summary" hidden><div class="wrap stack" id="summary"></div></main>
+  <main class="view" id="view-accent" hidden><div class="wrap stack" id="accent"></div></main>
+  <main class="view" id="view-vocab" hidden><div class="wrap stack-sm" id="vocab"></div></main>
+  <main class="view" id="view-me" hidden><div class="wrap stack" id="me"></div></main>
+  <main class="view" id="view-mode" hidden><div class="wrap stack" id="mode"></div></main>
+  <main class="view" id="view-models" hidden><div class="wrap stack" id="models"></div></main>
+</div>
+
+<div class="sheet" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+  <div class="sheet-panel" id="settings-panel"></div>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

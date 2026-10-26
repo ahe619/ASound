@@ -1,0 +1,32 @@
+# XcodeGen spec (https://github.com/yonaskolb/XcodeGen): on a Mac, run `xcodegen` in this folder to create
+# ASound.xcodeproj, after copying the web app into ASound/www:
+#   rsync -a --exclude models --exclude dev ../../app/ ASound/www/
+name: ASound
+options:
+  bundleIdPrefix: app.asound
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  ASound:
+    type: application
+    platform: iOS
+    sources:
+      - path: ASound
+        excludes: ["www/**"]
+      - path: ASound/www
+        type: folder          # copied into the app as a folder reference, served by LocalServer.swift
+    info:
+      path: ASound/Info.plist
+      properties:
+        CFBundleDisplayName: ASound
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: ASound listens to you speak English so it can answer and give feedback. Your voice stays on this device.
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.asound
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1,2"

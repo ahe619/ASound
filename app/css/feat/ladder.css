@@ -1,0 +1,36 @@
+/* Reduction Ladder (js/feat-ladder.js): a 4-rung ladder of the same sentence, fast on top, careful at the bottom. */
+
+.lad-ladder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lad-rung { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 8px 6px 8px; margin-inline-start: calc(var(--i, 0) * 12px); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); min-width: 0; }
+.lad-rung.on { border-color: var(--orange); box-shadow: inset 3px 0 0 var(--orange); background: var(--orange-soft); }
+.lad-rung.locked { opacity: 0.55; }
+.lad-n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.lad-n .ic { width: 15px; height: 15px; }
+.lad-rung.on .lad-n { background: var(--orange); color: var(--orange-ink); }
+.lad-rung.caught .lad-n { background: var(--pen-green); color: var(--surface); }
+.lad-name { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.lad-name b { font-size: 14px; }
+.lad-name small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.lad-rung .icon-btn { margin-left: auto; }
+
+/* the sentence: reduced parts marked, missed words left blank */
+mark.lad-hl { background: var(--marker); color: var(--marker-ink); border-radius: 3px; padding: 0 2px; }
+mark.lad-hl.miss { background: var(--pen-red-soft); color: var(--pen-red); box-shadow: inset 0 -2px 0 var(--pen-red); }
+.lad-blank { display: inline-block; min-width: 2em; border-bottom: 2px dashed var(--muted); line-height: 1; vertical-align: baseline; }
+.lad-cloze { line-height: 1.8; }
+.lad-say { font-size: 20px; }
+.tag.lad-ok { background: var(--pen-green-soft); color: var(--pen-green); }
+.tag.lad-miss { background: var(--pen-red-soft); color: var(--pen-red); }
+.lad-typed summary { cursor: pointer; padding: 4px 0; }
+.lad-typed[open] summary { margin-bottom: 6px; }
+
+/* per-rule profile */
+.lad-prof { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.lad-prof li { display: flex; flex-direction: column; gap: 2px; padding: 9px 0; border-top: 1px solid var(--line); }
+.lad-prof li:first-child { border-top: 0; padding-top: 0; }
+.lad-prof-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lad-rule { font-family: var(--font-en); font-weight: 600; font-size: 16px; min-width: 0; overflow-wrap: anywhere; margin-right: auto; }
+.lad-prof .meter { flex: 0 1 120px; min-width: 60px; }
+.lad-prof li.mid .meter i { background: var(--blue); }
+.lad-prof li.low .meter i { background: var(--pen-red); }
+.lad-prof li.new .pill { color: var(--orange); font-weight: 700; }
