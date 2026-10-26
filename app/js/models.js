@@ -29,6 +29,7 @@ export function showModels({ setup = false, onReady = null } = {}) {
 }
 
 const gb = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
+const insecureWeb = () => packMode() === "web" && globalThis.isSecureContext === false;
 
 function groupSize(group) {
   const p = packById(variant(group));
@@ -55,7 +56,7 @@ export function renderModels() {
       h("strong", null, t("models.quickTitle")),
       h("p", { class: "hint-line" }, t("models.quickList", { list: recGroups.map((g) => t(`pack.${g}.name`)).join(" + "), size: gb(missingSize) })),
       h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn hot", disabled: !missing.length || busy, onclick: () => missing.forEach((g) => install(variant(g))) }, icon("download"), t("models.quickGo", { size: gb(missingSize) }))))
+        h("button", { type: "button", class: "btn hot", disabled: !missing.length || busy || insecureWeb(), onclick: () => missing.forEach((g) => install(variant(g))) }, icon("download"), t("models.quickGo", { size: gb(missingSize) }))))
     : null;
 
   const startRow = () => (setupMode
@@ -78,6 +79,7 @@ export function renderModels() {
   const free = freeSpace();
   fill($("#models"),
     h("header", { class: "sum-head" }, head),
+    insecureWeb() ? h("p", { class: "note-card warn" }, t("models.secureRequired")) : null,
     web ? voiceDownloadCard({ study: true }) : null,
     quick,
     web ? h("p", { class: "note-card" }, t("models.webDownloadNote")) : null,
@@ -109,6 +111,7 @@ export function voiceDownloadCard({ study = false } = {}) {
   return h("section", { class: "card voice-download", "aria-label": t("models.voiceOnlyTitle") },
     h("h2", { class: "sec-title" }, t("models.voiceOnlyTitle")),
     h("p", { class: "hint-line" }, t("models.voiceOnlyNote")),
+    insecureWeb() ? h("p", { class: "note-card warn" }, t("models.secureRequired")) : null,
     h("ul", { class: "pack-list" }, packRow("voice", { key: "voice" }, recommended(), activePacks())),
     study ? h("button", { type: "button", class: "btn", onclick: () => setTab("vocab") }, t("models.studyWithoutModels")) : null);
 }
@@ -135,7 +138,7 @@ function packRow(group, sec, rec, active) {
   } else if (st.state === "downloading" || st.state === "queued") {
     actions.push(h("button", { type: "button", class: "btn quiet", onclick: () => cancel(id) }, t("models.cancel")));
   } else {
-    actions.push(h("button", { type: "button", class: "btn primary", onclick: () => { if (sec.choose && !active[sec.choose]) choose(sec.choose, group, false); install(id); } },
+    actions.push(h("button", { type: "button", class: "btn primary", disabled: insecureWeb(), onclick: () => { if (sec.choose && !active[sec.choose]) choose(sec.choose, group, false); install(id); } },
       icon("download"), st.state === "partial" ? t("models.resume") : t("models.download")));
     if (st.state === "partial") {
       const del = h("button", { type: "button", class: "icon-btn sm", "aria-label": t("models.remove"), title: t("models.remove") }, icon("trash"));

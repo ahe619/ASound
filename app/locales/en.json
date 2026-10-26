@@ -378,6 +378,7 @@
   "models.voiceOnlyTitle": "Start with spoken words",
   "models.voiceOnlyNote": "This voice pack is enough to read vocabulary aloud. Conversation and recognition models are optional. Download once for offline speech; reading words needs no model.",
   "models.studyWithoutModels": "Study words now",
+  "models.secureRequired": "This HTTP page cannot store offline models. Once the site's HTTPS certificate is ready, open its https:// address to download. You can study words now.",
   "speech.voicePackRequired": "Download the Kokoro voice pack before using this audio feature.",
   "speech.noEnglishVoice": "No English voice is available. Download Kokoro or add an English voice in your system settings.",
   "natural.error": "The natural voice service is unavailable. Another available voice will be used.",

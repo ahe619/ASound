@@ -378,6 +378,7 @@
   "models.voiceOnlyTitle": "先下载朗读声音",
   "models.voiceOnlyNote": "背单词只需这个语音包即可朗读，不必下载对话和录音识别模型。下载完成后可离线使用；仅阅读文字无需下载。",
   "models.studyWithoutModels": "直接去背单词",
+  "models.secureRequired": "当前是 HTTP 页面，浏览器无法保存离线模型。请等网站 HTTPS 证书就绪后，通过 https:// 地址打开再下载；现在可以先背单词。",
   "speech.voicePackRequired": "请先下载 Kokoro 语音包，再使用这项声音功能。",
   "speech.noEnglishVoice": "设备没有可用的英语语音，请下载 Kokoro 或在系统中添加英语声音。",
   "natural.error": "高自然度语音服务暂不可用，将使用其他可用声音。",
