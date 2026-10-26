@@ -2,10 +2,10 @@
 import { prefs, state } from "./state.js";
 import { $, h } from "./util.js";
 import { setLanguage, applyI18n, t } from "./i18n.js";
-import { registerTab, setTab, show } from "./nav.js";
+import { registerTab, registerTabCleanup, setTab, show } from "./nav.js";
 import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent } from "./accent.js";
-import { renderVocab, paintVocabCount } from "./vocab.js";
+import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
 import { renderMe } from "./me.js";
 import { initSettings } from "./settings.js";
 import { onStoreChange } from "./store.js";
@@ -38,6 +38,11 @@ async function boot() {
   registerTab("talk", () => { if (state.talkView === "home") renderTalkHome(); });
   registerTab("accent", renderAccent);
   registerTab("vocab", renderVocab);
+  registerTabCleanup("vocab", cleanupVocab);
+  window.addEventListener("pagehide", cleanupVocab);
+  window.addEventListener("pageshow", event => {
+    if (event.persisted && state.tab === "vocab") renderVocab();
+  });
   registerTab("me", renderMe);
   for (const tab of ["talk", "accent", "vocab", "me"]) $("#tab-" + tab).addEventListener("click", () => setTab(tab));
 
@@ -55,6 +60,7 @@ async function boot() {
   initUpdates({
     enabled: packMode() === "web" && !inAppShell,
     canApply: () => !state.busy && state.tab !== "mode" && state.tab !== "accent"
+      && !(state.tab === "vocab" && isVocabPracticing())
       && !(state.tab === "talk" && state.talkView === "chat")
       && !["recording", "listening"].includes(window.ASoundMic?.status().mic),
   });
@@ -70,7 +76,12 @@ async function boot() {
     if (window.ASoundMic) window.ASoundMic.preload();
   };
   // First run (or models removed): set up the downloads before anything else.
-  if (ready()) start(); else showModels({ setup: true, onReady: start });
+  if (ready()) start();
+  else {
+    showModels({ setup: true, onReady: start });
+    // Text vocabulary study does not require downloading or starting any AI model.
+    if (location.hash.slice(1) === "vocab") setTab("vocab");
+  }
 }
 
 // Installed as a web app (https): keep the app itself available offline.

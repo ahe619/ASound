@@ -3,6 +3,12 @@
 当前优先发布网页版，再把同一个网站集成进手机应用。GitHub 可以承担代码管理、自动检查和网页发布；
 AI 仍在用户设备运行，模型继续从 `app/packs.json` 配置的 Hugging Face / 镜像下载源获取。
 
+面向中国大陆的小模型测试包及自建模型下载源配置，见 [国内网页测试与部署](CHINA_DEPLOYMENT.md)。
+
+`soundoa.cn` 当前选择直接使用已有 `ahe619/ASound` 仓库，具体按 [soundoa.cn 上线准备](SOUNDOA_LAUNCH.md) 操作。
+源码仓库工作流运行 `tools/prepare_soundoa_site.py`，构建并校验小模型选项的网页，再仅发布 `dist/soundoa-site/site/`。
+必须先确认账号方案支持当前仓库可见性的 Pages，并启用下述部署变量；配置不会替用户公开仓库。
+
 ## 已接好的更新流程
 
 ```text

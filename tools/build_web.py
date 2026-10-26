@@ -15,10 +15,11 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
-DIRECTORIES = {"css", "fonts", "img", "js", "kokoro", "locales", "vendor"}
+DIRECTORIES = {"css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'
@@ -30,6 +31,38 @@ def encode(value):
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def validate_model_base_url(value):
+    """Return a stable public model root, allowing HTTP only for local previews."""
+    if not isinstance(value, str) or not value or any(c.isspace() or ord(c) < 32 for c in value):
+        raise ValueError("Model base URL must be a nonempty URL without whitespace")
+    if "\\" in value:
+        raise ValueError("Model base URL cannot contain backslashes")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Invalid model base URL") from exc
+    if (not parsed.hostname or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or "?" in value or "#" in value):
+        raise ValueError("Model base URL must not contain credentials, a query or a fragment")
+    if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1")):
+        raise ValueError("Model base URL must use HTTPS (HTTP is allowed only on localhost)")
+    if port == 0 or not re.fullmatch(r"[A-Za-z0-9.:-]+", parsed.hostname):
+        raise ValueError("Invalid model base URL host or port")
+    decoded = parsed.path
+    for _ in range(8):
+        previous = decoded
+        decoded = unquote(decoded)
+        if decoded == previous:
+            break
+    else:
+        raise ValueError("Model base URL has excessive URL encoding")
+    if (any(part in (".", "..") for part in decoded.split("/")) or "\\" in decoded
+            or any(c.isspace() or ord(c) < 32 for c in decoded) or "?" in decoded or "#" in decoded):
+        raise ValueError("Model base URL cannot contain traversal or ambiguous path segments")
+    return value.rstrip("/")
 
 
 def source_files(source):
@@ -45,8 +78,9 @@ def source_files(source):
             yield relative, path
 
 
-def build(source, output, version, license_file=None):
+def build(source, output, version, license_file=None, model_base_url=None, model_packs=None):
     source, output = Path(source).resolve(), Path(output).resolve()
+    model_base_url = validate_model_base_url(model_base_url) if model_base_url is not None else None
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version):
         raise ValueError("Version must contain 1-64 letters, digits, dots, underscores or hyphens")
     if source == output or output.is_relative_to(source) or source.is_relative_to(output):
@@ -66,6 +100,21 @@ def build(source, output, version, license_file=None):
         for name in ROOT_FILES:
             if not (stage / name).is_file():
                 raise ValueError(f"Missing required web asset: {name}")
+        if model_base_url or model_packs is not None:
+            catalog_path = stage / "packs.json"
+            catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+            if model_packs is not None:
+                values = [model_packs] if isinstance(model_packs, str) else model_packs
+                selected = {name.strip() for value in values for name in value.split(",")}
+                available = {pack["id"] for pack in catalog.get("packs", [])}
+                if not selected or "" in selected or selected - available:
+                    raise ValueError("Model pack selection is empty or contains unknown IDs: " + ", ".join(sorted(selected - available)))
+                catalog["packs"] = [pack for pack in catalog["packs"] if pack["id"] in selected]
+            if model_base_url:
+                # A self-hosted build must not silently send model requests to third parties.
+                catalog["sources"] = {"deployment": {"models": model_base_url, "libs": model_base_url + "/libs"}}
+                catalog["defaultSource"] = "deployment"
+            catalog_path.write_text(encode(catalog) + "\n", encoding="utf-8", newline="\n")
         if license_file:
             shutil.copyfile(license_file, stage / "LICENSES.md")
         (stage / ".nojekyll").write_text("", encoding="utf-8")
@@ -100,8 +149,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, default=ROOT / "dist" / "web")
     parser.add_argument("--version", default=(ROOT / "VERSION").read_text(encoding="utf-8").strip())
+    parser.add_argument("--model-base-url", help="Public HTTPS model root; omit to keep the existing model sources")
+    parser.add_argument("--packs", help="Comma-separated model pack IDs to expose; omit to include all packs")
     args = parser.parse_args()
-    result = build(ROOT / "app", args.out, args.version, ROOT / "LICENSES.md")
+    result = build(ROOT / "app", args.out, args.version, ROOT / "LICENSES.md", args.model_base_url, args.packs)
     print(f"{result['version']}: {result['files']} assets, {result['bytes'] / 1_000_000:.1f} MB -> {result['output']}")
 
 

@@ -1,0 +1,25 @@
+{
+  "package": "@wllama/wllama-compat",
+  "version": "3.8.1",
+  "source": "https://registry.npmjs.org/@wllama/wllama-compat/-/wllama-compat-3.8.1.tgz",
+  "registry": "https://registry.npmjs.org/@wllama%2fwllama-compat/3.8.1",
+  "integrity": "sha512-IvmjrJ+JzDbt3w1FQq1yAmnFEiLGCceowK2Q80zW+k9ChFkPBM1ByX/9xm2xVxyd8MHC50VpuDo6SDE83k9kIQ==",
+  "shasum": "b6f28d88e076b260d4b280c6f797a885d87d1f3a",
+  "license": "MIT",
+  "files": [
+    {
+      "file": "compat/wllama.js",
+      "bytes": 171615,
+      "sha256": "2649eeb408988841c372e54805adfa25aed5d02f850c09add78c2f3ac0f3fce1"
+    },
+    {
+      "file": "compat/wllama.wasm",
+      "bytes": 16005007,
+      "sha256": "2db3f67d0bcc19cdf8f14f129e46cab691bff898954808f8a2dc4c586eb5bb68"
+    }
+  ],
+  "sdkVersion": "3.8.1",
+  "sdkFilesMatchOfficialPackage": true,
+  "licenseNoticeSource": "../LICENSE.txt",
+  "licenseNoticeNote": "The npm package declares MIT and contains no LICENSE file. This copy preserves the existing vendored wllama MIT notice."
+}

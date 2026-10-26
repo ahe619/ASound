@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; style-src 'unsafe-inline'">
+<title>ASound CPU compatibility runtime check</title>
+<h1>CPU compatibility runtime check</h1>
+<p>Forces compatibility mode, blocks external hosts, and starts the actual ASound CPU loader with an invalid synthetic model. No model weights are downloaded.</p>
+<pre id="result">Running…</pre>
+<script>
+// Simulate a browser without JSPI; this change applies only to this test page.
+Object.defineProperty(WebAssembly, 'Suspending', {value: undefined, configurable: true});
+</script>
+<script src="js/local-ai.js"></script>
+<script type="module">
+const output = document.querySelector('#result');
+const violations = [];
+const debug = [];
+let instance;
+document.addEventListener('securitypolicyviolation', e => violations.push(e.blockedURI));
+const timeout = setTimeout(() => { output.textContent = 'FAIL: runtime check timed out'; }, 30000);
+const url = URL.createObjectURL(new Blob(['This is deliberately not a GGUF model.']));
+try {
+  const { Wllama } = await import('./vendor/wllama/index.js');
+  const loadModel = Wllama.prototype.loadModel;
+  // Observe the production loader's runtime choice and startup logs, without replacing inference logic.
+  Wllama.prototype.loadModel = function (...args) {
+    instance = this;
+    this.config.logger = {...console, debug: (...items) => debug.push(items.map(String).join(' '))};
+    return loadModel.apply(this, args);
+  };
+  ASoundAI.configure({kind:'cpu', model_id:'synthetic-compat-check', url, ctx:32}, {start:false});
+  let modelError;
+  try { await ASoundAI.load(); } catch (error) { modelError = error; }
+  if (!instance) throw new Error('ASound did not initialize the CPU engine');
+  const resources = instance.getWorkerResources();
+  const base = new URL('./', location.href).href;
+  if (!resources.compat || !resources.jsPath.startsWith(base) || !resources.wasmPath.startsWith(base)) {
+    throw new Error('Compatibility runtime did not use local site resources');
+  }
+  if (!debug.some(line => line.includes('Loading model...'))) {
+    throw new Error('Runtime did not reach model loading: ' + (modelError?.message || debug.join('\n')));
+  }
+  // Some SDK versions return an empty model context for this fixture instead of rejecting it.
+  // The smoke test only asserts native runtime startup, not GGUF validation or inference.
+  if (violations.length) throw new Error('Blocked external resource attempts: ' + violations.join(', '));
+  output.textContent = [
+    'PASS: actual ASound CPU loader selected same-site compatibility JS and WASM',
+    'PASS: compatibility WASM started without cross-origin isolation',
+    'PASS: runtime reached model initialization using only the synthetic fixture',
+    'PASS: no external resource attempts under the restrictive CSP',
+    'This verifies runtime startup only; real-phone inference is still untested.',
+    modelError ? 'Synthetic model error: ' + modelError.message : 'No real model or inference was tested.',
+  ].join('\n');
+} catch (error) {
+  output.textContent = 'FAIL: ' + error.message + '\n' + debug.join('\n');
+} finally {
+  clearTimeout(timeout);
+  URL.revokeObjectURL(url);
+  if (instance) { try { await instance.exit(); } catch {} }
+}
+</script>

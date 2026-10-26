@@ -4,6 +4,7 @@
 //             (Cache Storage for speech files, keyed independently of the mirror; WebLLM's own cache for the LLM)
 // Add ?web to the address to try the phone path on a computer.
 import { prefs, savePrefs } from "./state.js";
+import { downloadModelFile, discardModelPartial, modelPartialBytes } from "./model-download.js";
 
 export const CACHE = "asound-models-v1";
 export const CANON = "https://models.asound.invalid/"; // cache keys look the same whichever source served the file
@@ -26,9 +27,18 @@ export const packById = (id) => packList().find((p) => p.id === id) || null;
 export const packStatus = (id) => status[id] || { state: "absent", done: 0, total: (packById(id) || {}).size || 0 };
 export const freeSpace = () => free;
 export const resolvedSource = () => resolved;
+export const sourceList = () => Object.keys(catalog?.sources || {});
+let connectionResults = null;
+let checkingConnections = false;
+export const connectionStatus = () => ({ checking: checkingConnections, results: connectionResults });
 
 export async function initPacks() {
   catalog = await fetch("packs.json", { cache: "no-cache" }).then((r) => r.json());
+  if (!sourceList().length) throw new Error("No model download source configured");
+  if (prefs.source !== "auto" && !sourceList().includes(prefs.source)) {
+    prefs.source = "auto";
+    savePrefs();
+  }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
   gpu = await probeGpu();
   await refresh();
@@ -54,10 +64,14 @@ async function probeGpu() {
 // The packs this device should start with.
 export function recommended() {
   const strong = /nvidia|amd|ati|radeon/i.test(gpu.vendor);
+  const available = (groups) => groups.find((g) => packById(variant(g)));
+  const llms = !gpu.webgpu ? ["llm-cpu"] : gpu.mobile
+    ? ["llm-0.8b", "llm-2b", "llm-cpu"]
+    : strong ? ["llm-4b", "llm-2b", "llm-0.8b", "llm-cpu"] : ["llm-2b", "llm-0.8b", "llm-cpu"];
   return {
-    // phones: the medium model only on ones with plenty of memory (navigator.deviceMemory tops out at 8)
-    llm: !gpu.webgpu ? "llm-cpu" : gpu.mobile ? ((navigator.deviceMemory || 4) >= 8 ? "llm-2b" : "llm-0.8b") : strong ? "llm-4b" : "llm-2b",
-    asr: gpu.mobile || !gpu.webgpu ? "asr-tiny" : "asr-base",
+    // Start small on every phone; a memory hint alone does not establish inference speed.
+    llm: available(llms) || llms[0],
+    asr: available(gpu.mobile || !gpu.webgpu ? ["asr-tiny", "asr-base"] : ["asr-base", "asr-tiny"]) || "asr-tiny",
   };
 }
 
@@ -74,7 +88,7 @@ export function activePacks() {
   const rec = recommended();
   const firstOf = (wanted, order) => [wanted, ...order].find((g) => g && groupInstalled(g)) || null;
   // without WebGPU only the processor model can run
-  const llms = gpu.webgpu ? ["llm-4b", "llm-2b", "llm-0.8b", "llm-cpu"] : ["llm-cpu"];
+  const llms = gpu.webgpu ? (gpu.mobile ? ["llm-0.8b", "llm-2b", "llm-4b", "llm-cpu"] : ["llm-4b", "llm-2b", "llm-0.8b", "llm-cpu"]) : ["llm-cpu"];
   return {
     llm: firstOf(llms.includes(prefs.llm) ? prefs.llm : rec.llm, llms),
     asr: firstOf(prefs.asr || rec.asr, ["asr-base", "asr-tiny"]),
@@ -93,36 +107,73 @@ export function ready() {
 /* ---------- where files come from ---------- */
 
 let probing = null;
-async function pickSource() {
-  if (prefs.source !== "auto") return prefs.source;
-  if (resolved) return resolved;
+async function probeSource(name) {
+  const t0 = performance.now();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 6000);
+  try {
+    const asr = packById(recommended().asr);
+    const configFile = asr?.files.find((f) => f.path === "config.json")
+      || packList().flatMap((p) => p.files).find((f) => f.repo && /(?:^|\/)(?:config|mlc-chat-config)\.json$/.test(f.path));
+    if (!configFile) throw new Error("No model configuration file is available for a connection check");
+    const r = await fetch(fileUrl(configFile, name), { signal: ctl.signal, cache: "no-store" });
+    if (!r.ok) throw new Error(`Model source: HTTP ${r.status}`);
+    await r.json();
+    // Check the GPU library too: an accessible model mirror alone is not enough.
+    const pack = packById(variant(recommended().llm));
+    if (gpu.webgpu && pack?.llm) {
+      const lib = await fetch(fileUrl({ lib: pack.llm.lib }, name), { signal: ctl.signal, cache: "no-store", headers: { Range: "bytes=0-7" } });
+      if (!lib.ok || !lib.body) throw new Error(`Model runtime: HTTP ${lib.status}`);
+      const reader = lib.body.getReader();
+      const prefix = [];
+      try {
+        while (prefix.length < 8) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          prefix.push(...value.subarray(0, 8 - prefix.length));
+        }
+      } finally { await reader.cancel().catch(() => {}); }
+      if (prefix.length < 8 || prefix.slice(0, 4).join(",") !== "0,97,115,109") throw new Error("Invalid model runtime response");
+    }
+    return { name, ok: true, ms: Math.round(performance.now() - t0) };
+  } catch (error) {
+    return { name, ok: false, error: String(error.message || error).slice(0, 160) };
+  } finally { clearTimeout(timer); }
+}
+
+// A short connectivity check, not a bandwidth or device-performance benchmark.
+export async function checkConnections() {
   if (!probing) {
+    checkingConnections = true;
+    emit();
     probing = (async () => {
-      const tryOne = async (name) => {
-        const t0 = performance.now();
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 6000);
-        try {
-          const r = await fetch(`${catalog.sources[name].models}/onnx-community/moonshine-tiny-ONNX/resolve/main/config.json`, { signal: ctl.signal, cache: "no-store" });
-          if (!r.ok) throw new Error(String(r.status));
-          await r.text();
-          return { name, ms: performance.now() - t0 };
-        } finally { clearTimeout(timer); }
-      };
-      const results = (await Promise.allSettled(Object.keys(catalog.sources).map(tryOne))).filter((r) => r.status === "fulfilled").map((r) => r.value);
-      results.sort((a, b) => a.ms - b.ms);
-      resolved = results.length ? results[0].name : "hf";
-      probing = null;
-      emit();
-      return resolved;
+      try {
+        connectionResults = await Promise.all(sourceList().map(probeSource));
+        const working = connectionResults.filter((r) => r.ok).sort((a, b) => a.ms - b.ms);
+        resolved = working[0]?.name || null;
+        return connectionResults;
+      } finally {
+        checkingConnections = false;
+        probing = null;
+        emit();
+      }
     })();
   }
   return probing;
 }
 
+async function pickSource() {
+  if (prefs.source !== "auto" && sourceList().includes(prefs.source)) return prefs.source;
+  if (sourceList().includes(catalog.defaultSource)) return catalog.defaultSource;
+  if (resolved) return resolved;
+  await checkConnections();
+  // Cached speech models can still load offline through their source-independent keys.
+  return resolved || sourceList()[0];
+}
+
 export function fileUrl(f, source) {
   const src = catalog.sources[source];
-  return f.repo ? `${src.models}/${f.repo}/resolve/main/${f.path}` : `${src.libs}/${f.lib}`;
+  return f.repo ? `${src.models}/${f.repo}/resolve/main/${f.path}` : `${src.libs}/${f.lib.replace(/^libs\//, "")}`;
 }
 export const canonKey = (f) => CANON + (f.repo ? `${f.repo}/${f.path}` : f.path);
 
@@ -181,15 +232,18 @@ async function webStatus() {
       status[p.id] = { state: have ? "installed" : cur && cur.error ? "partial" : "absent", done: have ? p.size : 0, total: p.size, error: cur && cur.error };
       continue;
     }
-    let have = 0;
-    if (cache) for (const f of p.files) { if (await cache.match(canonKey(f))) have += f.size; }
-    status[p.id] = { state: have >= p.size ? "installed" : have ? "partial" : "absent", done: have, total: p.size, error: cur && cur.error };
+    let have = 0, partial = 0;
+    if (cache) for (const f of p.files) {
+      if (await cache.match(canonKey(f))) have += f.size;
+      else partial += await modelPartialBytes(canonKey(f), f).catch(() => 0);
+    }
+    status[p.id] = { state: have >= p.size ? "installed" : have || partial || cur?.error ? "partial" : "absent", done: have + partial, total: p.size, error: cur && cur.error };
   }
   try { const est = await navigator.storage.estimate(); free = est.quota - est.usage; } catch { free = null; }
 }
 // WebLLM keeps its own cache; we remember which language models finished loading once, and from where.
 const FLAG = "asound.llmCached.v1";
-function llmSource(id) { try { return JSON.parse(localStorage.getItem(FLAG) || "{}")[id] || ""; } catch { return ""; } }
+function llmSource(id) { try { const source = JSON.parse(localStorage.getItem(FLAG) || "{}")[id]; return sourceList().includes(source) ? source : ""; } catch { return ""; } }
 function setLlmSource(id, source) {
   try {
     const all = JSON.parse(localStorage.getItem(FLAG) || "{}");
@@ -201,6 +255,7 @@ function setLlmSource(id, source) {
 /* ---------- actions ---------- */
 
 export async function install(id) {
+  if (!packById(id)) return;
   if (mode === "desktop") {
     await post("install", { id, source: prefs.source });
     return;
@@ -216,8 +271,12 @@ export async function install(id) {
 export async function cancel(id) {
   if (mode === "desktop") { await post("cancel", { id }); return; }
   const at = webQueue.indexOf(id);
-  if (at >= 0) webQueue.splice(at, 1);
-  if (webCurrent && webCurrent.id === id) webCurrent.ctl.abort();
+  if (at >= 0) { webQueue.splice(at, 1); delete status[id]; }
+  if (webCurrent && webCurrent.id === id) {
+    const current = webCurrent;
+    current.ctl.abort();
+    await current.finished;
+  }
   await refresh();
 }
 
@@ -225,6 +284,7 @@ export async function remove(id) {
   if (mode === "desktop") { await post("remove", { id }); return; }
   await cancel(id);
   const p = packById(id);
+  if (!p) return;
   if (p.kind === "llm") {
     try {
       const webllm = await import(new URL("vendor/web-llm/index.js", location.href).href);
@@ -235,8 +295,12 @@ export async function remove(id) {
   } else {
     const cache = await caches.open(CACHE);
     const inUse = new Set(packList().filter((q) => q.id !== id && installed(q.id)).flatMap((q) => q.files.map(canonKey)));
-    for (const f of p.files) if (!inUse.has(canonKey(f))) await cache.delete(canonKey(f));
+    for (const f of p.files) if (!inUse.has(canonKey(f))) {
+      await cache.delete(canonKey(f));
+      await discardModelPartial(canonKey(f));
+    }
   }
+  delete status[id];
   await refresh();
 }
 
@@ -257,62 +321,61 @@ async function pumpWeb() {
   const id = webQueue.shift();
   const p = packById(id);
   const ctl = new AbortController();
-  webCurrent = { id, ctl };
+  let finish;
+  webCurrent = { id, ctl, finished: new Promise((resolve) => { finish = resolve; }) };
   const t0 = performance.now();
+  let lastPaint = -Infinity;
   const set = (done) => {
-    const secs = (performance.now() - t0) / 1000;
+    const now = performance.now();
+    const secs = (now - t0) / 1000;
     status[id] = { state: "downloading", done, total: p.size, rate: secs > 1 ? Math.round(done / secs) : 0 };
-    emit();
+    if (now - lastPaint >= 150 || done === p.size) { lastPaint = now; emit(); }
   };
   set(0);
   try {
     try { await navigator.storage.persist(); } catch {}
     if (p.kind === "llm") {
       const source = await pickSource();
+      ctl.signal.throwIfAborted();
       const cfg = await engineConfig(id, source);
       await window.ASoundAI.download(cfg.llm, (frac) => set(Math.round(frac * p.size)), ctl.signal);
+      ctl.signal.throwIfAborted();
       setLlmSource(id, source);
     } else {
       const source = await pickSource();
+      ctl.signal.throwIfAborted();
       const cache = await caches.open(CACHE);
       let done = 0;
       for (const f of p.files) {
+        ctl.signal.throwIfAborted();
         if (await cache.match(canonKey(f))) { done += f.size; set(done); continue; }
-        await fetchInto(cache, f, source, ctl.signal, (n) => set(done + n));
+        await downloadModelFile({ cache, key: canonKey(f), file: f,
+          urls: [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
+          signal: ctl.signal, onBytes: (n) => set(done + n) });
         done += f.size;
         set(done);
       }
     }
+    ctl.signal.throwIfAborted();
     delete status[id];
   } catch (e) {
     status[id] = { ...packStatus(id), state: "partial", error: ctl.signal.aborted ? undefined : String((e && e.message) || e).slice(0, 160) };
     if (!ctl.signal.aborted) console.warn("download failed", id, e);
   }
-  webCurrent = null;
-  await webStatus();
-  emit();
-  pumpWeb();
-}
-
-// Stream one file into the cache (large files never sit in memory), counting bytes for the progress bar.
-async function fetchInto(cache, f, source, signal, onBytes) {
-  let res;
   try {
-    res = await fetch(fileUrl(f, source), { signal, cache: "no-store" });
-    if (!res.ok) throw new Error(`${res.status} ${f.path}`);
+    await webStatus();
   } catch (e) {
-    if (signal.aborted) throw e;
-    res = await fetch(fileUrl(f, source === "hf" ? "mirror" : "hf"), { signal, cache: "no-store" }); // one retry elsewhere
-    if (!res.ok) throw new Error(`${res.status} ${f.path}`);
+    console.warn("Could not refresh model storage", e);
+  } finally {
+    webCurrent = null;
+    finish();
+    emit();
+    pumpWeb();
   }
-  let n = 0;
-  const counted = res.body.pipeThrough(new TransformStream({ transform(chunk, ctl) { n += chunk.length; onBytes(n); ctl.enqueue(chunk); } }));
-  const key = canonKey(f);
-  await cache.put(key, new Response(counted, { headers: { "Content-Type": "application/octet-stream", "Content-Length": String(f.size) } }));
-  if (n !== f.size) { await cache.delete(key); throw new Error(`incomplete download: ${f.path}`); }
 }
 
 export function setSource(s) {
+  if (s !== "auto" && !sourceList().includes(s)) return;
   prefs.source = s;
   savePrefs();
   resolved = null;

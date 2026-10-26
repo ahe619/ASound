@@ -7,6 +7,8 @@ ASound's own code (everything under `app/js`, `app/css`, `app/index.html`, `app/
 |---|---|---|---|
 | [Qwen3.5](https://huggingface.co/Qwen) 0.8B / 2B / 4B (MLC builds `mlc-ai/Qwen3.5-*-MLC`, downloaded in the app) | conversation, corrections, summaries | Apache-2.0 | OK (keep the license notice) |
 | [WebLLM](https://github.com/mlc-ai/web-llm) `@mlc-ai/web-llm` 0.2.86 + MLC model library | runs the LLM on WebGPU | Apache-2.0 | OK |
+| [wllama](https://github.com/ngxson/wllama) 3.8.1 + `@wllama/wllama-compat` 3.8.1 | processor-based LLM runtime, including compatibility JS/WASM | MIT | Keep bundled license notices; package source and checksums are recorded in `app/vendor/wllama/compat/SOURCE.json` |
+| [ECDICT](https://github.com/skywind3000/ECDICT/tree/ab22ad36302cafc6349a050e2b60894855208055) | vocabulary definitions, phonetics, frequency ranks and postgraduate reference tags | MIT | License retained in `app/vocabulary/ECDICT-LICENSE.txt`; CET word-list membership has its own official source attribution in `docs/VOCABULARY_SOURCES.md` |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) weights | standard voice | Apache-2.0 | OK |
 | [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx) 0.6.1 | runs Kokoro in the local server | MIT | OK |
 | [kokoro-js](https://github.com/hexgrad/kokoro) 1.2.1 | in-browser fallback voice | Apache-2.0 | OK |

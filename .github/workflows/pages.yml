@@ -33,15 +33,15 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: JavaScript regression tests
         run: node --test tests/*.mjs
-      - name: Build a versioned release
-        run: python tools/build_web.py
+      - name: Build and verify the small-model website release
+        run: python tools/prepare_soundoa_site.py
       - name: Upload only the web release
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/web
+          path: dist/soundoa-site/site
   deploy:
-    if: github.event_name != 'pull_request' && vars.ASOUND_PAGES_ENABLED == 'true'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.ASOUND_PAGES_ENABLED == 'true'
     needs: build
     permissions:
       pages: write

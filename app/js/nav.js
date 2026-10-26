@@ -26,6 +26,8 @@ export function show() {
 
 export function setTab(tab) {
   state.tab = TABS.includes(tab) ? tab : "talk";
+  // Preserve the selected tab on reload without adding an entry for every tab click.
+  try { history.replaceState(history.state, "", `#${state.tab}`); } catch {}
   const fn = renderers[state.tab];
   if (fn) fn();
   show();

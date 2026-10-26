@@ -6,7 +6,7 @@ import { show, setTab } from "./nav.js";
 import { confirmInline } from "./widgets.js";
 import {
   packList, packById, packStatus, packMode, recommended, variant, activePacks, ready, install, cancel, remove,
-  freeSpace, resolvedSource, setSource, gpuInfo,
+  freeSpace, resolvedSource, setSource, gpuInfo, sourceList, checkConnections, connectionStatus,
 } from "./packs.js";
 
 const SECTIONS = [
@@ -64,15 +64,22 @@ export function renderModels() {
       isReady ? null : h("span", { class: "hint-line" }, t("models.needAll")))
     : null);
 
+  const connection = connectionStatus();
+  const sources = sourceList();
   const sourceBox = h("div", { class: "stack-xs" },
     h("span", { class: "field-label" }, t("models.source")),
-    seg([["auto", t("models.source.auto")], ["hf", t("models.source.hf")], ["mirror", t("models.source.mirror")]], prefs.source, (id) => { setSource(id); renderModels(); }),
-    h("p", { class: "hint-line" }, prefs.source === "auto" && resolvedSource() ? t("models.sourcePicked", { name: t(`models.source.${resolvedSource()}`) }) : t("models.sourceNote")));
+    seg([["auto", t("models.source.auto")], ...sources.map((s) => [s, t(`models.source.${s}`)])], prefs.source, (id) => { setSource(id); renderModels(); }),
+    h("p", { class: "hint-line" }, sources.length === 1 && sources[0] === "deployment" ? t("models.sourceHostedNote") : prefs.source === "auto" && resolvedSource() ? t("models.sourcePicked", { name: t(`models.source.${resolvedSource()}`) }) : t("models.sourceNote")),
+    web ? h("div", { class: "stack-xs", "aria-live": "polite" },
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn", disabled: connection.checking || busy, onclick: () => checkConnections() }, t(connection.checking ? "models.connectionChecking" : "models.connectionCheck"))),
+      connection.results?.map((r) => h("p", { class: "hint-line" }, t(r.ok ? "models.connectionOk" : "models.connectionFailed", { name: t(`models.source.${r.name}`), ms: r.ms }))),
+      h("p", { class: "hint-line" }, t("models.connectionNote"))) : null);
 
   const free = freeSpace();
   fill($("#models"),
     h("header", { class: "sum-head" }, head),
     quick,
+    web ? h("p", { class: "note-card" }, t("models.webDownloadNote")) : null,
     startRow(),
     SECTIONS.map((sec) => section(sec, rec, active, web)),
     sourceBox,
@@ -83,7 +90,10 @@ export function renderModels() {
 function section(sec, rec, active, web) {
   const gpu = gpuInfo().webgpu;
   // without WebGPU only the processor model can run; with it, the faster GPU models are the ones to offer
-  const groups = sec.groups.filter((g) => !(web && (packById(variant(g)) || {}).desktopOnly) && (sec.key !== "llm" || (g === "llm-cpu") !== gpu));
+  const groups = sec.groups.filter((g) => {
+    const pack = packById(variant(g));
+    return pack && !(web && pack.desktopOnly) && (sec.key !== "llm" || (g === "llm-cpu") !== gpu);
+  });
   if (!groups.length) return null;
   const noGpu = sec.key === "llm" && !gpuInfo().webgpu;
   return h("section", { class: "stack-sm" },
@@ -116,6 +126,11 @@ function packRow(group, sec, rec, active) {
   } else {
     actions.push(h("button", { type: "button", class: "btn primary", onclick: () => { if (sec.choose && !active[sec.choose]) choose(sec.choose, group, false); install(id); } },
       icon("download"), st.state === "partial" ? t("models.resume") : t("models.download")));
+    if (st.state === "partial") {
+      const del = h("button", { type: "button", class: "icon-btn sm", "aria-label": t("models.remove"), title: t("models.remove") }, icon("trash"));
+      del.addEventListener("click", () => confirmInline(del, () => remove(id)));
+      actions.push(del);
+    }
   }
 
   let line;

@@ -101,7 +101,7 @@ export const prefs = Object.assign(
     inputMode: "voice",    // voice | type
     llm: "",               // model pack group: llm-0.8b | llm-2b | llm-4b ("" = recommended for this device)
     asr: "",               // asr-tiny | asr-base
-    source: "auto",        // where models download from: auto | hf | mirror
+    source: "auto",        // auto | hf | mirror | deployment (configured by the web build)
   },
   readJSON(K_PREFS, {}),
 );
@@ -114,7 +114,7 @@ if (!DOC_MODES.includes(prefs.docMode)) prefs.docMode = "teacher";
 if (!["standard", "natural"].includes(prefs.voiceEngine)) prefs.voiceEngine = "standard";
 prefs.rate = Math.min(1.3, Math.max(0.6, Number(prefs.rate) || 1));
 if (prefs.rate === 0.95) prefs.rate = 1; // the old default sounded a little dragged
-if (!["auto", "hf", "mirror"].includes(prefs.source)) prefs.source = "auto";
+if (!["auto", "hf", "mirror", "deployment"].includes(prefs.source)) prefs.source = "auto";
 if (!HELP_LANGS.some((l) => l.id === prefs.helpLang)) prefs.helpLang = AUTO.help;
 export const savePrefs = () => writeJSON(K_PREFS, prefs);
 

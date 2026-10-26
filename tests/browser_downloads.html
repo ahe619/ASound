@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ASound 浏览器下载验证</title>
+<style>
+  :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f7fb; color: #182238; }
+  body { max-width: 880px; margin: 48px auto; padding: 0 24px; line-height: 1.65; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 12px 20px; color: white; background: #244dd9; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: wait; }
+  .pass { color: #17643a; } .fail { color: #b02525; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: white; border: 1px solid #dde2ed; padding: 16px; border-radius: 10px; }
+  #status { font-weight: 650; }
+</style>
+<h1>浏览器下载验证</h1>
+<p>使用约 5 MiB 的本地合成文件验证真实 Fetch 和 Cache Storage，不下载真实模型。模拟连接中断时，控制台出现网络错误属于预期现象。</p>
+<button id="run">运行下载恢复测试</button>
+<p id="status" role="status">等待开始</p>
+<ol id="results"></ol>
+<details><summary>JSON 测试报告</summary><pre id="report">{ "status": "waiting" }</pre></details>
+<script type="module">
+import { downloadModelFile, modelPartialBytes, discardModelPartial } from "/app/js/model-download.js";
+
+const button = document.getElementById("run"), status = document.getElementById("status");
+const results = document.getElementById("results"), reportNode = document.getElementById("report");
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const digest = async (response) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await response.arrayBuffer())), n => n.toString(16).padStart(2, "0")).join("");
+let busy = false;
+
+button.addEventListener("click", async () => {
+  if (busy) return;
+  busy = true; button.disabled = true; results.replaceChildren();
+  const run = crypto.randomUUID(), started = performance.now();
+  const report = { status: "running", run, tests: [], error: null };
+  const keys = ["resume", "full", "wrong"].map(name => `${location.origin}/__model-download-test/${run}/${name}`);
+  let cache;
+  const update = () => { reportNode.textContent = JSON.stringify(report, null, 2); };
+  const pass = (name, details) => {
+    report.tests.push({ name, passed: true, details });
+    const item = document.createElement("li"); item.className = "pass"; item.textContent = `PASS — ${name}`;
+    results.append(item); update();
+  };
+  const control = async (action) => {
+    const response = await fetch(`/control/${action}?run=${run}`, { method: "POST" });
+    if (!response.ok) throw new Error(`Control endpoint ${action}: ${response.status}`);
+    return response.json();
+  };
+  const requests = async () => (await (await fetch(`/control/report?run=${run}`)).json()).requests;
+  try {
+    status.textContent = "正在验证中断后的分块保留…"; status.className = ""; update();
+    const info = await (await fetch("/fixture-info")).json();
+    const file = { size: info.size, sha256: info.sha256, path: "fixture.bin" };
+    report.fixture = info;
+    cache = await caches.open("asound-download-browser-checks-v1");
+    await control("reset");
+    const options = (index, path, override = {}) => ({ cache, key: keys[index], file, urls: [`${location.origin}/fixture/${path}.bin?run=${run}`], ...override });
+    let interrupted = false;
+    try { await downloadModelFile(options(0, "resume")); } catch { interrupted = true; }
+    assert(interrupted, "The intentionally broken transfer should fail");
+    assert(!(await cache.match(keys[0])), "An interrupted file became visible in the final cache");
+    const preserved = await modelPartialBytes(keys[0], file);
+    assert(preserved === info.chunkBytes, `Expected one saved chunk, got ${preserved} bytes`);
+    pass("连接中断保留首个 4 MiB 分块，最终模型缓存没有半成品", { preserved });
+
+    status.textContent = "正在恢复下载并检查请求范围…";
+    const before = (await requests()).length;
+    await control("recover");
+    await downloadModelFile(options(0, "resume"));
+    const resumed = (await requests()).slice(before);
+    assert(resumed.length === 1 && resumed[0].start === info.chunkBytes, "Resume downloaded an already saved chunk");
+    pass("恢复时只请求缺失的后续字节", resumed);
+    assert(await digest(await cache.match(keys[0])) === info.sha256, "Completed model SHA-256 differs from synthetic fixture");
+    assert(await modelPartialBytes(keys[0], file) === 0, "Completed transfer left its partial chunks behind");
+    pass("完成文件 SHA-256 正确，暂存分块已清理");
+
+    status.textContent = "正在验证不支持 Range 的服务器…";
+    const beforeFull = (await requests()).length;
+    await downloadModelFile(options(1, "full"));
+    const fullRequests = (await requests()).slice(beforeFull);
+    assert(fullRequests.length === 1 && fullRequests[0].status === 200, "Range-ignoring server was not handled in one response");
+    assert(await digest(await cache.match(keys[1])) === info.sha256, "Full-response fallback has incorrect bytes");
+    pass("服务器返回 HTTP 200 时安全回退为完整下载", fullRequests);
+
+    status.textContent = "正在验证 SHA-256 不匹配时拒绝安装…";
+    let rejected = false;
+    try { await downloadModelFile(options(2, "wrong", { file: { ...file, sha256: "0".repeat(64) } })); } catch (error) { rejected = /SHA-256/.test(error.message); }
+    assert(rejected, "Incorrect SHA-256 did not cause a digest failure");
+    assert(!(await cache.match(keys[2])), "A digest mismatch was committed to the final cache");
+    assert(await modelPartialBytes(keys[2], { ...file, sha256: "0".repeat(64) }) === 0, "Bad digest left corrupt partial data");
+    pass("SHA-256 不匹配不提交最终文件，并清理错误分块");
+    report.status = "passed";
+    status.textContent = `PASS：${report.tests.length} 项浏览器下载检查完成`;
+    status.className = "pass";
+  } catch (error) {
+    report.status = "failed"; report.error = String(error.stack || error);
+    status.textContent = `FAIL：${error.message}`; status.className = "fail";
+    const item = document.createElement("li"); item.className = "fail"; item.textContent = report.error; results.append(item);
+  } finally {
+    for (const key of keys) {
+      try { await discardModelPartial(key); await cache?.delete(key); } catch (error) { report.cleanupError = String(error); }
+    }
+    report.elapsedMs = Math.round(performance.now() - started); update();
+    busy = false; button.disabled = false;
+  }
+});
+</script>
+</html>

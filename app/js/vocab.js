@@ -3,17 +3,44 @@
 import { $, h, fill, icon, str, fmtIpa, meter } from "./util.js";
 import { t } from "./i18n.js";
 import { vocab } from "./store.js";
-import { speakBtn, speak, unlockAudio } from "./speech.js";
+import { speakBtn, speak, unlockAudio, stopSpeaking } from "./speech.js";
 import { micButton } from "./mic.js";
 import { readingMatch } from "./diff.js";
 import { confirmInline, fmtDay } from "./widgets.js";
+import { renderWordStudy, cleanupWordStudy, isWordStudyActive } from "./word-study.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const INTERVALS = [0, 1 * DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY]; // by box 0..5
 let query = "";
 let review = null; // {ids, idx, revealed, heard}
+let section = "study";
+
+function sections() {
+  return h("nav", { class: "seg", "aria-label": t("vocab.sections") }, ["study", "saved"].map(id =>
+    h("button", { type: "button", "aria-pressed": String(section === id), onclick: () => {
+      if (section === id) return;
+      cleanupVocab();
+      review = null;
+      section = id;
+      renderVocab();
+    } }, t(`vocab.section.${id}`))));
+}
+
+export function cleanupVocab() {
+  cleanupWordStudy();
+  stopSpeaking();
+  window.ASoundMic?.cancel?.();
+}
+
+export const isVocabPracticing = () => Boolean(review) || isWordStudyActive();
 
 export function renderVocab() {
+  if (section === "study") {
+    const root = h("section", { class: "stack-sm", id: "word-study" });
+    fill($("#vocab"), sections(), root);
+    renderWordStudy(root);
+    return;
+  }
   if (review) { renderReview(); return; }
   const all = vocab.all();
   const due = vocab.due();
@@ -30,6 +57,7 @@ export function renderVocab() {
     try { again.setSelectionRange(pos, pos); } catch {}
   });
   fill($("#vocab"),
+    sections(),
     h("div", { class: "vocab-head" }, h("h1", { class: "title" }, t("vocab.title")), h("span", { class: "pill" }, t("vocab.count", { n: all.length }))),
     h("p", { class: "lede" }, t("vocab.note")),
     all.length ? h("div", { class: "card review-card" },

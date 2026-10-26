@@ -113,6 +113,11 @@
     status.progress = 0.5;
     render();
     const w = new Wllama({ default: new URL("vendor/wllama/wllama.wasm", location.href).href }, { suppressNativeLog: true });
+    // Keep older browsers' compatibility runtime in the same verified offline release.
+    w.setCompat({
+      worker: new URL("vendor/wllama/compat/wllama.js", location.href).href,
+      wasm: new URL("vendor/wllama/compat/wllama.wasm", location.href).href,
+    });
     await w.loadModel([blob], { n_ctx: cpuModel.ctx || 4096, n_gpu_layers: 0, jinja: true });
     status.progress = 1;
     let ctl = null;
