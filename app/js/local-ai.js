@@ -31,8 +31,8 @@
   // Interface text; the app replaces these with the current language through ASoundAI.setLabels().
   let labels = {
     loading: "Loading the AI model {pct}%",
-    error: "The AI model failed to load: {error}",
-    noGpu: "This browser has no WebGPU. Open ASound in the latest Edge or Chrome.",
+    error: "AI could not start. Refresh the page to try again.",
+    noGpu: "This conversation option could not start. Open downloads and choose the recommended option.",
   };
   const fmt = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? ""));
 

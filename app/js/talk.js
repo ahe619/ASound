@@ -11,7 +11,7 @@ import { diffFragment, sameWords, looseEqual, readingMatch, normTok, tokens } fr
 import { speak, speakBtn, stopSpeaking, unlockAudio, isSpeaking } from "./speech.js";
 import { micButton, micSupported, handsFree } from "./mic.js";
 import { vocab, sessions, profile, placements, live, rehearsals } from "./store.js";
-import { setTalkView } from "./nav.js";
+import { setTalkView, currentRoute, registerViewCleanup } from "./nav.js";
 import { saveBtn, confirmInline, fmtDate, levelName, voiceRecommendCard } from "./widgets.js";
 import { modeCards } from "./modes.js";
 
@@ -28,11 +28,12 @@ const FIELD_ANGLES = [
 const thread = () => $("#thread");
 const userTurns = (s) => s.turns.filter((x) => x.role === "user").length;
 const lastAssistant = (s, before) => s.turns.slice(0, before).reverse().find((x) => x.role === "assistant")?.text || "";
+const chatVisible = () => state.tab === "talk" && state.talkView === "chat" && !currentRoute().overlay;
 
 /* ====================== home ====================== */
 
 export function renderTalkHome() {
-  const saved = state.session ? null : live.get();
+  const saved = state.session || live.get();
   fill($("#talk-home"),
     resumeCard(saved),
     debriefCard(),
@@ -259,7 +260,11 @@ function resumeCard(saved) {
   return h("div", { class: "resume" },
     h("div", { class: "resume-text" }, h("strong", null, t("talk.resumeTitle")), h("span", null, t("talk.resumeMeta", { title: sessionTitle(saved), n: userTurns(saved) }))),
     h("button", { type: "button", class: "btn primary", onclick: () => resumeSession(saved) }, t("talk.resume")),
-    h("button", { type: "button", class: "btn quiet", onclick: () => { live.clear(); renderTalkHome(); } }, t("talk.discard")));
+    h("button", { type: "button", class: "btn quiet", onclick: () => {
+      if (state.session === saved) closeSession();
+      else live.clear();
+      renderTalkHome();
+    } }, t("talk.discard")));
 }
 
 export function sessionTitle(s) {
@@ -367,6 +372,9 @@ function beginSession(s) {
 }
 
 export function resumeSession(saved) {
+  // The live object owns its pending reply and existing chat nodes. Returning
+  // from Home must not clone it or reset the busy composer while it is replying.
+  if (state.session === saved) { setTalkView("chat"); return; }
   state.session = { ...saved, turns: saved.turns.map((x) => ({ ...x })) };
   renderChat();
   setTalkView("chat");
@@ -608,7 +616,7 @@ export function paintSayCheck(box, target, heard) {
 async function sendText(raw) {
   const s = state.session;
   const text = str(raw);
-  if (!s || !text || state.busy) return false;
+  if (!s || !text || state.busy || !chatVisible()) return false;
   stopSpeaking();
   $("#hints").hidden = true;
   if (isOtherScript(text)) { await sendHelp(s, text); return true; }
@@ -664,7 +672,7 @@ function sendFromBox() {
 
 async function requestReply() {
   const s = state.session;
-  if (!s) return;
+  if (!s || !chatVisible()) return;
   const bubble = h("div", { class: "bubble thinking" }, t("chat.thinking"), thinkingDots());
   const li = h("li", { class: "msg ai" }, bubble);
   thread().append(li);
@@ -698,8 +706,7 @@ async function requestReply() {
     bubble.className = "bubble";
     fill(bubble, h("span", { class: "err" }, aiErrorText(e)));
     li.append(h("div", { class: "msg-tools" }, h("button", { type: "button", class: "mini", onclick: () => { li.remove(); requestReply(); } }, t("chat.retry"))));
-    setLive("listening");
-    handsFree.resume();
+    if (chatVisible()) { setLive("listening"); handsFree.resume(); }
   } finally {
     if (s._ctl === ctl) s._ctl = null;
     if (state.session === s) setBusy(false);
@@ -708,9 +715,10 @@ async function requestReply() {
 
 function afterReply(turn, el) {
   const s = state.session;
+  if (!s || !chatVisible()) return;
   const done = (s.kind === "placement" && userTurns(s) >= PLACEMENT_TURNS) || (s.kind === "profile" && userTurns(s) >= PROFILE_TURNS);
   const next = () => {
-    if (state.session !== s) return;
+    if (state.session !== s || !chatVisible()) return;
     if (done) { finishSession(); return; }
     if (handsFree.on) { setLive("listening"); handsFree.resume(); }
   };
@@ -859,7 +867,7 @@ async function toggleLive() {
 }
 // If speech was stopped by hand, hands-free would stay paused; pick it up again.
 setInterval(() => {
-  if (handsFree.on && state.session && !state.busy && !isSpeaking() && (liveState === "speaking" || liveState === "thinking")) {
+  if (chatVisible() && handsFree.on && state.session && !state.busy && !isSpeaking() && (liveState === "speaking" || liveState === "thinking")) {
     setLive("listening");
     handsFree.resume();
   }
@@ -1124,6 +1132,16 @@ function autosize() {
 }
 
 export function initTalk() {
+  registerViewCleanup("talk", "chat", () => {
+    // Returning home or opening another page pauses the microphone without
+    // erasing the conversation. A late model reply may save text, never autoplay.
+    handsFree.stop();
+    window.ASoundMic?.cancel?.();
+    stopSpeaking();
+    held = "";
+    clearTimeout(holdTimer);
+    setLive("off");
+  });
   $("#composer").addEventListener("submit", (e) => { e.preventDefault(); sendFromBox(); });
   const box = $("#composer-input");
   const coarse = window.matchMedia && matchMedia("(pointer: coarse)").matches;

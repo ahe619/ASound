@@ -2,7 +2,7 @@
 import { prefs, savePrefs, state } from "./state.js";
 import { $, h, fill, icon, meter } from "./util.js";
 import { t } from "./i18n.js";
-import { show, setTab } from "./nav.js";
+import { navigate, goBack, registerTab, setTab } from "./nav.js";
 import { confirmInline } from "./widgets.js";
 import {
   packList, packById, packStatus, packMode, recommended, variant, activePacks, ready, install, cancel, remove,
@@ -18,14 +18,16 @@ const SECTIONS = [
 
 let setupMode = false;
 let afterSetup = null;
+const expandedDetails = new Set();
+registerTab("models", (route) => {
+  setupMode = !!route.setup;
+  renderModels();
+});
 
 export function showModels({ setup = false, onReady = null } = {}) {
   setupMode = setup;
   afterSetup = onReady;
-  state.tab = "models";
-  renderModels();
-  show();
-  $("#view-models").scrollTop = 0;
+  navigate({ tab: "models", setup });
 }
 
 const gb = (bytes) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
@@ -38,6 +40,12 @@ function groupSize(group) {
 
 export function renderModels() {
   if (state.tab !== "models") return;
+  // Progress and connection checks repaint this view. Keep the panels the user opened.
+  for (const detail of document.querySelectorAll("#models details[data-download-detail]")) {
+    const key = detail.dataset.downloadDetail;
+    if (detail.open) expandedDetails.add(key);
+    else expandedDetails.delete(key);
+  }
   const rec = recommended();
   const active = activePacks();
   const isReady = ready();
@@ -85,7 +93,8 @@ export function renderModels() {
     web ? h("p", { class: "note-card" }, t("models.webDownloadNote")) : null,
     startRow(),
     SECTIONS.map((sec) => section(sec, rec, active, web)),
-    sourceBox,
+    h("details", { class: "download-options", "data-download-detail": "connections", open: expandedDetails.has("connections") },
+      h("summary", { class: "field-label" }, t("models.connectionOptions")), sourceBox),
     h("p", { class: "hint-line" }, [free != null ? t(web ? "models.freeWeb" : "models.free", { size: gb(free) }) : "", t("models.licenses")].filter(Boolean).join(" ")),
     isReady ? startRow() : null);
 }
@@ -98,10 +107,8 @@ function section(sec, rec, active, web) {
     return pack && !(web && (pack.desktopOnly || g === "voice")) && (sec.key !== "llm" || (g === "llm-cpu") !== gpu);
   });
   if (!groups.length) return null;
-  const noGpu = sec.key === "llm" && !gpuInfo().webgpu;
   return h("section", { class: "stack-sm" },
     h("div", { class: "stack-xs" }, h("h2", { class: "sec-title" }, t(`models.sec.${sec.key}`)), h("p", { class: "hint-line" }, t(`models.sec.${sec.key}.note`))),
-    noGpu ? h("p", { class: "note-card warn" }, t("models.noGpu")) : null,
     h("ul", { class: "pack-list" }, groups.map((g) => packRow(g, sec, rec, active))));
 }
 
@@ -164,7 +171,10 @@ function packRow(group, sec, rec, active) {
   return h("li", { class: "pack" + (inUse && st.state === "installed" ? " in-use" : "") },
     h("div", { class: "pack-main" },
       h("div", { class: "row" }, h("strong", null, t(`pack.${group}.name`)), h("span", { class: "pill" }, gb(p.size)), badges),
-      h("p", { class: "hint-line" }, t(`pack.${group}.desc`), " ", h("span", { class: "license" }, `${p.name} \u00b7 ${p.license}`)),
+      h("p", { class: "hint-line" }, t(`pack.${group}.desc`)),
+      h("details", { class: "pack-details hint-line", "data-download-detail": `license:${id}`, open: expandedDetails.has(`license:${id}`) },
+        h("summary", null, t("models.sourceAndLicense")),
+        h("p", { class: "license" }, `${p.name} \u00b7 ${p.license}`)),
       line),
     h("div", { class: "pack-actions" }, actions));
 }
@@ -188,10 +198,10 @@ function finishSetup() {
   setupMode = false;
   const fn = afterSetup;
   afterSetup = null;
-  setTab("talk");
+  setTab("talk", { replace: true });
   if (fn) fn();
 }
 
 function leave() {
-  setTab("talk");
+  goBack({ tab: packMode() === "web" ? "vocab" : "talk" });
 }

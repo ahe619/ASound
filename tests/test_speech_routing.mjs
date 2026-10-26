@@ -13,7 +13,7 @@ const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolv
 const en = { name: "English", lang: "en-US" };
 
 function fixture({ mobile = true, preference = "auto", voices = [en], system = true,
-  health = null, search = "", failStart = false } = {}) {
+  health = null, search = "", failStart = false, healthGate = null, browserGate = null, synthesisGate = null } = {}) {
   const requests = [], utterances = [], sources = [], timers = new Map(), listeners = {};
   let serial = 0, imports = 0, syntheses = 0, currentVoices = voices, currentHealth = health;
   const prefs = { voiceEngine: preference, voice: "af_heart", rate: 1 };
@@ -48,13 +48,21 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
     clearTimeout: id => timers.delete(id),
     async fetch(path, options) {
       requests.push({ path, options });
-      if (path === "api/health") return { ok: !!currentHealth, status: currentHealth ? 200 : 404, json: async () => currentHealth };
+      if (path === "api/health") {
+        if (healthGate) await healthGate;
+        return { ok: !!currentHealth, status: currentHealth ? 200 : 404, json: async () => currentHealth };
+      }
       if (path === "api/natural/start") return { ok: !failStart, status: failStart ? 500 : 200, json: async () => ({ natural: "loading" }) };
       return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) };
     },
     async loadBrowserModule() {
       imports++;
-      return { configure() {}, onStatus() {}, async synthesize() { syntheses++; return { pcm: new Float32Array(80), sr: 24000 }; } };
+      if (browserGate) await browserGate;
+      return { configure() {}, onStatus() {}, async synthesize() {
+        syntheses++;
+        if (synthesisGate) await synthesisGate;
+        return { pcm: new Float32Array(80), sr: 24000 };
+      } };
     },
   });
   vm.runInContext("globalThis.window = globalThis;", context);
@@ -66,9 +74,25 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
   };
 }
 
-test("mobile auto uses an installed browser voice without NVIDIA", async () => {
+test("mobile auto keeps system English first even after installing a voice pack", async () => {
   const f = fixture();
   f.configureVoice({ mode: "web", base: "/voices/" });
+  f.warmUp(); await f.recheckSpeech();
+  f.speak("Hello."); await flush();
+  assert.equal(f.speechStatus().engine, "system");
+  assert.equal(f.voiceCapabilities().effective, "system");
+  assert.equal(f.imports(), 0);
+  assert.equal(f.syntheses(), 0);
+  assert.equal(f.utterances.length, 1);
+  assert.equal(f.prefs.voiceEngine, "auto");
+  assert.ok(f.requests.every(r => r.path === "api/health"));
+});
+
+test("explicit natural voices (standard preference) still use the installed browser pack on mobile", async () => {
+  const f = fixture({ preference: "standard" });
+  f.configureVoice({ mode: "web", base: "/voices/" });
+  await flush();
+  assert.equal(f.imports(), 0, "configuration alone does not load a model");
   f.speak("Hello."); await flush();
   assert.equal(f.speechStatus().engine, "browser");
   assert.equal(f.imports(), 1);
@@ -76,6 +100,84 @@ test("mobile auto uses an installed browser voice without NVIDIA", async () => {
   assert.equal(f.utterances.length, 0);
   assert.equal(f.voiceCapabilities().canNatural, false);
   assert.ok(f.requests.every(r => r.path === "api/health"));
+  assert.equal(f.prefs.voiceEngine, "standard");
+});
+
+test("mobile automatic speech starts without waiting for the local-service health check", async () => {
+  const f = fixture({ healthGate: new Promise(() => {}) });
+  f.configureVoice({ mode: "web" });
+  f.speak("Hello."); await flush();
+  assert.equal(f.speechStatus().engine, "system");
+  assert.equal(f.utterances.length, 1);
+  assert.equal(f.imports(), 0);
+});
+
+test("mobile auto falls back to installed voices when system English is absent or still unknown", async () => {
+  for (const options of [{ voices: [{ lang: "zh-CN" }] }, { system: false }, { voices: [] }]) {
+    const f = fixture(options);
+    f.configureVoice({ mode: "web" });
+    f.speak("Hello."); await flush();
+    assert.equal(f.speechStatus().engine, "browser");
+    assert.equal(f.syntheses(), 1);
+    assert.equal(f.utterances.length, 0);
+    assert.equal(f.prefs.voiceEngine, "auto");
+  }
+});
+
+test("mobile auto switches to system English when voices arrive without changing saved preference", async () => {
+  const f = fixture({ voices: [{ lang: "zh-CN" }] });
+  f.configureVoice({ mode: "web" });
+  f.speak("First."); await flush();
+  f.setVoices([en]);
+  f.speak("Second."); await flush();
+  assert.equal(f.syntheses(), 1);
+  assert.equal(f.utterances.length, 1);
+  assert.equal(f.voiceCapabilities().effective, "system");
+  assert.equal(f.prefs.voiceEngine, "auto");
+});
+
+test("stopping and switching to auto prevents an older synthesis from playing or changing the engine", async () => {
+  let release;
+  const f = fixture({ preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" });
+  let oldDone = 0;
+  f.speak("Slow sentence.", null, 1, () => oldDone++); await flush();
+  assert.equal(f.syntheses(), 1);
+  f.stopSpeaking();
+  f.prefs.voiceEngine = "auto";
+  f.speak("Fast sentence."); await flush();
+  release(); await flush();
+  assert.equal(f.sources.length, 0, "the stopped neural audio was not scheduled");
+  assert.equal(f.speechStatus().engine, "system");
+  assert.equal(f.utterances.length, 1);
+  assert.equal(oldDone, 0);
+});
+
+test("concurrent playback imports the browser module once and skips superseded requests", async () => {
+  let release;
+  const f = fixture({ preference: "standard", browserGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" });
+  await flush();
+  f.speak("First.");
+  f.speak("Second.");
+  await flush();
+  assert.equal(f.imports(), 1);
+  release(); await flush();
+  assert.equal(f.syntheses(), 1);
+  assert.equal(f.sources.length, 1);
+});
+
+test("changing voice configuration cancels audio still being generated by the previous configuration", async () => {
+  let release;
+  const f = fixture({ preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web", base: "/old/" });
+  let completed = 0;
+  f.speak("Old sentence.", null, 1, () => completed++); await flush();
+  f.configureVoice({ mode: "web", base: "/new/" });
+  release(); await flush();
+  assert.equal(f.sources.length, 0);
+  assert.equal(completed, 0);
+  assert.equal(f.prefs.voiceEngine, "standard");
 });
 
 test("without a downloaded voice, mobile auto speaks through the system without importing models", async () => {
@@ -174,6 +276,15 @@ test("desktop auto preserves native speech and natural requires ready service", 
   f.speak("A different sentence."); await flush();
   assert.equal(f.speechStatus().engine, "natural");
   assert.equal(JSON.parse(f.requests.at(-1).options.body).engine, "natural");
+});
+
+test("desktop automatic speech still prefers the installed browser pack to system speech", async () => {
+  const f = fixture({ mobile: false });
+  f.configureVoice({ mode: "web" });
+  f.speak("Hello."); await flush();
+  assert.equal(f.speechStatus().engine, "browser");
+  assert.equal(f.syntheses(), 1);
+  assert.equal(f.utterances.length, 0);
 });
 
 test("speech completion fires once even if a system error is followed by an end event", async () => {

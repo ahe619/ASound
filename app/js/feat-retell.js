@@ -1,14 +1,16 @@
 // Shrinking Retell: say the same content three times with less time each round (Nation's 4/3/2 fluency activity),
 // so the learner stops planning sentences and starts retrieving them. Each round is a timed recording; words,
 // speed, pauses, fillers and key-point coverage are measured here without the language model. Between rounds one
-// short model call suggests a tighter way to say one phrase the learner actually used.
+// optional model call on a prepared desktop suggests a tighter phrase. Other sessions use measured feedback.
 import { prefs, levelById, TOPICS } from "./state.js";
-import { h, fill, icon, str, isObj, arr, pick, toast, thinkingDots, readJSON, writeJSON } from "./util.js";
+import { h, fill, icon, str, isObj, arr, pick, thinkingDots, readJSON, writeJSON } from "./util.js";
 import { t } from "./i18n.js";
 import { askJSON, aiErrorText } from "./ai.js";
 import { helpLangName } from "./prompts.js";
 import { speakBtn, stopSpeaking, unlockAudio, audioContext } from "./speech.js";
 import { micSupported } from "./mic.js";
+import { activePacks } from "./packs.js";
+import { deviceInfo } from "./device.js";
 import { tokens, normTok, looseEqual } from "./diff.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
 
@@ -34,7 +36,7 @@ const PROMPTS = [
   { id: "plan", en: "What are you looking forward to this year, and why?" },
 ];
 
-// Used when the local model cannot write a story.
+// Ready-to-use stories also keep mobile practice independent of inference engines.
 const STORIES = [
   { title: "The Lost Umbrella", points: ["the bus", "the blue umbrella", "a funny message", "the lost and found", "a coffee for the driver"],
     text: "On Monday morning, Mia took the bus to work. It was raining hard, so she carried her big blue umbrella. She was reading a funny message from her sister and almost missed her stop. She jumped off the bus just in time, but the umbrella stayed on the seat. All day she felt bad about it. After work, she went back to the bus station and asked at the lost and found. A kind driver had found it and kept it safe. Mia thanked him and bought him a coffee." },
@@ -50,6 +52,8 @@ let M = null; // the mounted mode: {root, onExit, gen, ctl, rec, tick, clip}
 let S = null; // the drill in progress: {kind, content, level, limits, rounds, saved}
 let generation = 0;
 const current = (gen) => !!M && M.gen === gen;
+const canGenerate = () => !deviceInfo().mobile && !!activePacks().llm && !!window.claude;
+const canRecognize = () => micSupported() && !!activePacks().asr;
 
 /* ====================== mount / exit ====================== */
 
@@ -57,7 +61,6 @@ export function mount(root, { onExit } = {}) {
   unmount();
   const mounted = M = { root, onExit: onExit || (() => {}), gen: ++generation, ctl: null, rec: null, tick: 0, clip: null };
   S = null;
-  if (window.ASoundMic && window.ASoundMic.preload) window.ASoundMic.preload();
   renderHome();
   return () => { if (M === mounted) unmount(); };
 }
@@ -153,8 +156,12 @@ function newDrill(kind, content) {
 }
 
 async function startStory() {
-  unlockAudio();
   stopAll();
+  if (!canGenerate()) {
+    S = newDrill("story", { ...pick(STORIES) });
+    renderPrep();
+    return;
+  }
   const g = M.gen;
   const ctl = (M.ctl = new AbortController());
   show(
@@ -216,7 +223,6 @@ function renderTopics() {
 }
 
 function startSelf(p) {
-  unlockAudio();
   S = newDrill("self", { topic: p.id, title: p.en, text: p.en, points: [] });
   renderPrep();
 }
@@ -274,18 +280,22 @@ function chips(points, flags) {
 
 /* ====================== a round ====================== */
 
-function renderRound(i) {
+function renderRound(i, preferTyping = false) {
   stopAll();
-  unlockAudio();
   const g = M.gen, limit = S.limits[i], story = S.kind === "story";
+  const speechReady = canRecognize();
   const ring = ringEl(limit);
-  const status = h("p", { class: "hint-line rt-status", "aria-live": "polite" }, micSupported() ? t("retell.ready") : t("retell.noMic"));
-  const startB = h("button", { type: "button", class: "btn hot big", hidden: !micSupported() }, icon("mic"), t("retell.startSpeaking"));
+  const status = h("p", { class: "hint-line rt-status", "aria-live": "polite" }, t(speechReady ? "retell.ready" : micSupported() ? "retell.noRecognition" : "retell.noMic"));
+  const startB = h("button", { type: "button", class: "btn hot big", hidden: !speechReady }, icon("mic"), t("retell.startSpeaking"));
   const doneB = h("button", { type: "button", class: "btn primary big", hidden: true }, icon("check"), t("retell.done"));
   const typed = typeBox((text) => saveRound(i, { text, audio: null, typed: true }));
-  typed.hidden = micSupported();
-  const typeB = h("button", { type: "button", class: "btn quiet", hidden: !micSupported() }, icon("keyboard"), t("retell.typeInstead"));
-  typeB.addEventListener("click", () => { typed.hidden = !typed.hidden; if (!typed.hidden) typed.querySelector("textarea").focus(); });
+  typed.hidden = speechReady && !preferTyping;
+  const typeB = h("button", { type: "button", class: "btn quiet", hidden: !speechReady }, icon("keyboard"), t("retell.typeInstead"));
+  typeB.addEventListener("click", () => {
+    if (M.rec) { renderRound(i, true); return; }
+    typed.hidden = !typed.hidden;
+    if (!typed.hidden) typed.querySelector("textarea").focus();
+  });
   const ui = { ring, status, startB, doneB, typed, typeB };
   startB.addEventListener("click", () => record(i, g, ui));
   show(
@@ -300,23 +310,27 @@ function renderRound(i) {
 }
 
 async function record(i, g, ui) {
-  if (!micSupported()) { toast(t("mic.err.unsupported")); ui.typed.hidden = false; return; }
+  if (!current(g) || M.rec) return;
+  if (!canRecognize()) { ui.status.textContent = t("retell.noRecognition"); ui.startB.hidden = true; ui.typed.hidden = false; return; }
   unlockAudio();
   stopSpeaking();
   ui.startB.disabled = true;
-  let rec;
+  ui.status.textContent = t("retell.preparingMic");
+  const rec = startRecorder((v) => { if (current(g)) ui.ring.level(v); });
+  // Own cancellation before asking permission; an exit can precede record() resolving.
+  M.rec = rec;
   try {
-    rec = await startRecorder((v) => { if (current(g)) ui.ring.level(v); });
+    await rec.start();
   } catch (e) {
-    console.warn("retell mic", e);
-    if (!current(g)) return;
+    if (!current(g) || M.rec !== rec) return;
+    M.rec = null;
+    rec.cancel();
     ui.startB.disabled = false;
-    toast(micErrorText(e));
+    ui.status.textContent = micErrorText(e);
     ui.typed.hidden = false;
     return;
   }
-  if (!current(g)) { rec.cancel(); return; }
-  M.rec = rec;
+  if (!current(g) || M.rec !== rec) return;
   const limit = S.limits[i], t0 = performance.now();
   ui.startB.hidden = true;
   ui.typeB.hidden = true;
@@ -324,17 +338,22 @@ async function record(i, g, ui) {
   ui.doneB.hidden = false;
   ui.ring.el.classList.add("rec");
   ui.status.textContent = t("retell.recording");
+  let finishing = false;
   const finish = async () => {
-    if (!current(g) || M.rec !== rec) return;
+    if (!current(g) || M.rec !== rec || finishing) return;
+    finishing = true;
     clearInterval(M.tick);
     M.tick = 0;
-    M.rec = null;
     ui.ring.el.classList.remove("rec");
     ui.ring.level(0);
     ui.doneB.hidden = true;
+    ui.typeB.hidden = false;
     fill(ui.status, t("retell.recognizing"), thinkingDots());
-    const res = await rec.finish();
-    if (!current(g)) return;
+    let res;
+    try { res = await rec.finish(); }
+    catch (error) { res = { text: "", audio: null, error }; }
+    if (!current(g) || M.rec !== rec) return;
+    M.rec = null;
     if (res.text) { saveRound(i, { text: res.text, audio: res.audio, typed: false }); return; }
     if (res.error) console.warn("retell asr", res.error);
     ui.ring.set(limit);
@@ -358,40 +377,88 @@ function micErrorText(e) {
   const name = e && e.name;
   if (name === "NotAllowedError" || name === "SecurityError") return t("mic.err.denied");
   if (name === "NotFoundError") return t("mic.err.none");
-  return t("mic.err.generic");
+  return t("retell.asrFailed");
 }
 
-// Timed recording. ASoundMic.record() keeps at most 30 s, so a long round is cut into parts at a quiet moment
-// (after 18 s) or at 27 s; each part is transcribed while the learner keeps talking.
-async function startRecorder(onLevel) {
+// Capture short raw segments, then recognize them in sequence. Starting another capture invalidates
+// ASoundMic.stop()'s in-flight transcript, so recognition must not race the next recording segment.
+function startRecorder(onLevel) {
   const mic = window.ASoundMic;
   const parts = [];
-  let frames = 0, quiet = 0, on = true;
-  const take = () => mic.stop().catch((e) => ({ text: "", audio: null, error: e }));
-  const roll = () => {
-    if (!on) return;
-    parts.push(take());
-    mic.record(handlers).catch((e) => { console.warn(e); on = false; });
+  let frames = 0, quiet = 0, recording = true, closed = false, ownsCapture = false, rolling = null;
+  let rejectCancel;
+  const cancelled = new Promise((_, reject) => { rejectCancel = reject; });
+  cancelled.catch(() => {});
+  const aborted = () => Object.assign(new Error("retell recording cancelled"), { code: "cancelled", name: "AbortError" });
+  const ensureOpen = () => { if (closed) throw aborted(); };
+  const releaseCapture = () => { if (ownsCapture) { ownsCapture = false; mic.cancel(); } };
+  const cancel = () => {
+    if (closed) return;
+    closed = true;
+    recording = false;
+    rejectCancel(aborted());
+    releaseCapture();
+  };
+  const wait = async (job, ms = 60000) => {
+    let timer;
+    try {
+      return await Promise.race([job, cancelled, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error("retell recognition timed out"), { code: "timeout" })), ms);
+      })]);
+    } finally { clearTimeout(timer); }
+  };
+  const take = async () => {
+    const res = await wait(mic.stop({ raw: true }));
+    ensureOpen();
+    if (res?.audio?.length) parts.push(res.audio);
+  };
+  const roll = async () => {
+    ensureOpen();
+    await take();
+    if (!recording) return;
+    await wait(mic.record(handlers), 30000);
+    ensureOpen();
   };
   const handlers = {
     onLevel(v) { // once per 32 ms frame
+      if (closed || !recording) return;
       onLevel(v);
       frames++;
       quiet = v < 0.08 ? quiet + 1 : 0;
-      if (on && (frames >= 840 || (frames >= 560 && quiet >= 6))) { frames = 0; quiet = 0; queueMicrotask(roll); }
+      if (!rolling && (frames >= 840 || (frames >= 560 && quiet >= 6))) {
+        frames = 0; quiet = 0;
+        rolling = roll();
+        // Keep rejection observable by finish() without an unhandled promise rejection.
+        rolling.then(() => { rolling = null; }, () => { recording = false; releaseCapture(); });
+      }
     },
   };
-  await mic.record(handlers);
   return {
-    async finish() {
-      on = false;
-      parts.push(take());
-      const res = await Promise.all(parts);
-      const text = res.map((r) => str(r && r.text)).filter(Boolean).join(" ");
-      const err = res.find((r) => r && r.error);
-      return { text, audio: joinAudio(res.map((r) => r && r.audio).filter(Boolean)), error: err ? err.error : null };
+    async start() {
+      try {
+        ensureOpen();
+        ownsCapture = true;
+        await wait(mic.record(handlers), 30000);
+        ensureOpen();
+      } catch (error) { cancel(); throw error; }
     },
-    cancel() { if (on) { on = false; mic.cancel(); } },
+    async finish() {
+      try {
+        ensureOpen();
+        recording = false;
+        if (rolling) await rolling;
+        await take();
+        releaseCapture();
+        const text = [];
+        for (const audio of parts) {
+          ensureOpen();
+          if (audio.length >= 0.3 * RATE) text.push(str(await wait(mic.transcribe(audio.slice()))));
+        }
+        ensureOpen();
+        return { text: text.filter(Boolean).join(" "), audio: joinAudio(parts), error: null };
+      } finally { cancel(); }
+    },
+    cancel,
   };
 }
 
@@ -618,6 +685,11 @@ function ruleTip(m, last) {
 async function requestTip(i, box) {
   const r = S.rounds[i];
   if (r.tip) { paintTip(box, r); return; }
+  if (!canGenerate()) {
+    r.tip = ruleTip(r.m, i === 2);
+    paintTip(box, r);
+    return;
+  }
   const g = M.gen;
   const ctl = (M.ctl = new AbortController());
   fill(box, h("p", { class: "hint-line" }, t("retell.tipLoading"), thinkingDots()));

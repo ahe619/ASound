@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "batch": "initial-three-words",
+  "createdDate": "2026-10-26",
+  "dictionary": "words.json",
+  "notes": {
+    "en": "Three optional visual memory aids for selected senses; this is not coverage of the complete word list. Images do not change dictionary definitions, exam membership or random selection.",
+    "zh": "首批仅为三个词的选定义项提供可选记忆配图，不代表完整词库覆盖。配图不改变词典释义、考试归属或随机抽词。"
+  },
+  "illustrations": [
+    {
+      "wordId": "bridge",
+      "term": "bridge",
+      "sense": {
+        "zh": "桥",
+        "en": "a bridge across a river"
+      },
+      "alt": {
+        "zh": "一座石拱桥连接溪流两岸的小路。",
+        "en": "A stone arch bridge connects paths on the two banks of a stream."
+      },
+      "src": "img/vocabulary/bridge-v1.webp",
+      "width": 960,
+      "height": 720,
+      "bytes": 140436,
+      "sha256": "a595562f64966bfef4fb9da5e6b80184e1571fe02d7a5ff72ab8610fd006b4a3",
+      "generation": {
+        "tool": "image_gen.imagegen",
+        "mode": "built-in",
+        "date": "2026-10-26",
+        "inputImages": [],
+        "prompt": "Use case: scientific-educational. Asset type: an original vocabulary-learning flashcard illustration for an English study website. Style: elegant, friendly editorial gouache illustration with soft dimensional forms, subtle paper texture, clear object silhouettes, calm muted natural colors, restrained detail. Composition: a single coherent scene, landscape 4:3 framing, centered main subject with generous breathing room, all important objects fully inside the image. Background: softly lit warm ivory with a subtle ground shadow and no frame; readable when placed on either a light or dark app card. Constraints: no text, letters, numbers, captions, labels, logos, branding, watermark, recognizable landmarks, copyrighted characters, or people. Do not show a UI, flashcard border, collage, comparison panels, or a dictionary page. Primary request: illustrate the concrete noun sense of 'bridge', a structure that carries a path over a river. Show one small sturdy stone arch footbridge crossing a blue stream from one grassy bank to the other. A simple path clearly meets both ends of the bridge, with modest stones and a few plants. The stream is clearly visible flowing under the single arch. The bridge is the unmistakable main subject; keep the scenery minimal and inviting.",
+        "original": {
+          "archive": "build/generated-vocabulary-originals/bridge-v1.png",
+          "bytes": 2964953,
+          "sha256": "e7b373a65eafb07bcbafa40a7b245f939e5b44e822951d7bb3f2bc21e87dbe9c"
+        },
+        "publicationEncoding": {
+          "format": "webp",
+          "quality": 82,
+          "width": 960,
+          "preserveFullFrame": true
+        }
+      }
+    },
+    {
+      "wordId": "harvest",
+      "term": "harvest",
+      "sense": {
+        "zh": "收获",
+        "en": "gathering a ripe crop"
+      },
+      "alt": {
+        "zh": "收割后的麦田旁放着捆好的麦束和装满麦穗的篮子。",
+        "en": "Tied wheat sheaves and a basket of grain stand beside a harvested patch of field."
+      },
+      "src": "img/vocabulary/harvest-v1.webp",
+      "width": 960,
+      "height": 720,
+      "bytes": 168140,
+      "sha256": "7f75a723a7a405db5497526d519630e8182b4741216025738deb0dc349c79455",
+      "generation": {
+        "tool": "image_gen.imagegen",
+        "mode": "built-in",
+        "date": "2026-10-26",
+        "inputImages": [],
+        "prompt": "Use case: scientific-educational. Asset type: an original vocabulary-learning flashcard illustration for an English study website. Style: elegant, friendly editorial gouache illustration with soft dimensional forms, subtle paper texture, clear object silhouettes, calm muted natural colors, restrained detail. Composition: a single coherent scene, landscape 4:3 framing, centered main subject with generous breathing room, all important objects fully inside the image. Background: softly lit warm ivory with a subtle ground shadow and no frame; readable when placed on either a light or dark app card. Constraints: no text, letters, numbers, captions, labels, logos, branding, watermark, recognizable landmarks, copyrighted characters, or people. Do not show a UI, flashcard border, collage, comparison panels, or a dictionary page. Primary request: illustrate 'harvest' in the sense of gathering a ripe crop. Show freshly cut golden wheat neatly gathered into two tied sheaves beside a low wicker basket filled with ripe wheat ears, at the edge of a small wheat field. Show a short clearly cut stubble patch in the foreground and standing ripe wheat just behind, making the completed harvesting action visually understandable. No farmer, no tools or machinery; the gathered crop and contrast between cut and uncut field are the focus.",
+        "original": {
+          "archive": "build/generated-vocabulary-originals/harvest-v1.png",
+          "bytes": 3030707,
+          "sha256": "d3680a03b28a40128487b5019a45a95ab6981f50b5f6b1615acea972a98dbb66"
+        },
+        "publicationEncoding": {
+          "format": "webp",
+          "quality": 82,
+          "width": 960,
+          "preserveFullFrame": true
+        }
+      }
+    },
+    {
+      "wordId": "balance",
+      "term": "balance",
+      "sense": {
+        "zh": "平衡",
+        "en": "equilibrium"
+      },
+      "alt": {
+        "zh": "一架水平的天平，两边各有一个大小相近的苹果，托盘保持同一高度。",
+        "en": "A level balance scale holds one similarly sized apple in each pan, with both pans at the same height."
+      },
+      "src": "img/vocabulary/balance-v1.webp",
+      "width": 960,
+      "height": 720,
+      "bytes": 37432,
+      "sha256": "2e1b83d6c6579f8d66e1a19e09bf16243fe3347618abb8b33d455c7c60e373db",
+      "generation": {
+        "tool": "image_gen.imagegen",
+        "mode": "built-in",
+        "date": "2026-10-26",
+        "inputImages": [],
+        "prompt": "Use case: scientific-educational. Asset type: an original vocabulary-learning flashcard illustration for an English study website. Style: elegant, friendly editorial gouache illustration with soft dimensional forms, subtle paper texture, clear object silhouettes, calm muted natural colors, restrained detail. Composition: a single coherent scene, landscape 4:3 framing, centered main subject with generous breathing room, all important objects fully inside the image. Background: softly lit warm ivory with a subtle ground shadow and no frame; readable when placed on either a light or dark app card. Constraints: no text, letters, numbers, captions, labels, logos, branding, watermark, recognizable landmarks, copyrighted characters, or people. Do not show a UI, flashcard border, collage, comparison panels, or a dictionary page. Primary request: illustrate 'balance' in the sense of equilibrium, not a bank-account amount. Show a simple unbranded tabletop two-pan balance scale with a centered upright and a perfectly horizontal beam. Both hanging pans are at exactly the same height; each pan holds one equally sized red apple. Ensure the geometry is physically plausible, the pans do not touch the table, and the center pivot is visible. Plain background with only a gentle tabletop shadow. The equal level of the two sides must be unmistakable.",
+        "original": {
+          "archive": "build/generated-vocabulary-originals/balance-v1.png",
+          "bytes": 2183233,
+          "sha256": "041cecc9ccbca505f165f0f1dfde82f883be014fb51601481f644bfbb275b3b1"
+        },
+        "publicationEncoding": {
+          "format": "webp",
+          "quality": 82,
+          "width": 960,
+          "preserveFullFrame": true
+        }
+      }
+    }
+  ]
+}

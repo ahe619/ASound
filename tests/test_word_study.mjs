@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { TOPICS, SCENARIOS, normalizeOptions, filterWords, chooseWords, gradeProgress, readStudyState, saveStudyState } from "../app/js/word-study-core.js";
+import { TOPICS, SCENARIOS, normalizeOptions, filterWords, chooseWords, gradeProgress, readStudyState, saveStudyState,
+  meaningChoices, spellingCorrect, answerProgress, isAlternativeSpelling, spellingClue } from "../app/js/word-study-core.js";
 
 const words = [
   { id: "ticket", term: "ticket", general: true, exams: ["cet4", "cet6"], topics: ["travel"], scenarios: ["transport"] },
@@ -130,4 +131,85 @@ test("real bundled word bank has unique entries, documented sources and correct 
     assert.ok(strings.en[entry.key] && strings.zh[entry.key], `Missing label: ${entry.key}`);
     assert.ok((contexts.topics[entry.id] || contexts.scenarios[entry.id])?.length, `Missing context: ${entry.id}`);
   }
+});
+
+test("multiple choice keeps one correct definition and up to three unique real distractors", () => {
+  const target = { id: "bridge", term: "bridge", meaning: "n. 桥" };
+  const pool = [target, { id: "same", meaning: " n. 桥 " }, { id: "harvest", meaning: "n. 收获" },
+    { id: "balance", meaning: "n. 平衡" }, { id: "ticket", meaning: "n. 票" }, { id: "empty", meaning: "" }];
+  const result = meaningChoices(target, pool, () => 0.3);
+  assert.equal(result.length, 4);
+  assert.equal(result.filter(row => row.id === target.id).length, 1);
+  assert.equal(new Set(result.map(row => row.meaning.trim())).size, 4);
+  assert.ok(result.every(row => pool.includes(row)));
+  assert.equal(meaningChoices(target, pool.slice(0, 2)).length, 1, "do not fabricate distractors for a tiny pool");
+  assert.equal(meaningChoices(target, pool.slice(0, 3)).length, 2);
+});
+
+test("spelling accepts case and boundary whitespace, without forgiving wrong letters or punctuation", () => {
+  for (const answer of ["bridge", "BRIDGE", " BrIdGe  ", "\tbridge\n"]) assert.equal(spellingCorrect(answer, "bridge"), true);
+  for (const answer of ["", "bridg", "bridges", "br idge", "bridge!", "bridge road"]) assert.equal(spellingCorrect(answer, "bridge"), false);
+  assert.equal(spellingCorrect("ice  cream", "ice cream"), false);
+  assert.equal(spellingCorrect("reenter", "re-enter"), false);
+  assert.equal(spellingCorrect("cafe", "café"), false);
+  assert.equal(spellingCorrect("cafe\u0301", "café"), true, "canonical Unicode form is not a misspelling");
+});
+
+test("objective correctness is recorded separately from self-ratings and survives storage", () => {
+  const correct = answerProgress(null, true, "choice", 100);
+  assert.equal(correct.answers, 1); assert.equal(correct.correctAnswers, 1);
+  const incorrect = answerProgress(correct, false, "spelling", 200);
+  assert.equal(incorrect.answers, 2); assert.equal(incorrect.correctAnswers, 1);
+  assert.equal(incorrect.lastAnswerCorrect, false); assert.equal(incorrect.due, 600200);
+  const recalled = gradeProgress(incorrect, "good", 300);
+  assert.equal(recalled.answers, 2); assert.equal(recalled.correctAnswers, 1);
+  const storage = memory();
+  saveStudyState({ progress: { bridge: recalled } }, storage);
+  assert.deepEqual(readStudyState(storage).progress.bridge, recalled);
+  assert.throws(() => answerProgress(null, true, "invented"));
+});
+
+test("real dictionary alternatives are recognized without declaring target spelling correct", async () => {
+  const bank = JSON.parse(await readFile(new URL("../app/vocabulary/words.json", import.meta.url), "utf8")).words;
+  for (const [target, alternative] of [["clothes", "clothing"], ["color", "colour"], ["eventually", "finally"]]) {
+    const word = bank.find(row => row.term === target);
+    assert.equal(isAlternativeSpelling(alternative, word, bank), true);
+    assert.equal(isAlternativeSpelling(` ${alternative.toUpperCase()} `, word, bank), true);
+    assert.equal(spellingCorrect(alternative, target), false, "accepting a different valid word must not establish target recall");
+    assert.equal(isAlternativeSpelling(target, word, bank), false);
+    assert.equal(isAlternativeSpelling(`${alternative}!`, word, bank), false);
+    assert.equal(isAlternativeSpelling("bridge", word, bank), false);
+  }
+  assert.deepEqual(spellingClue("clothes"), { first: "c", count: 7 });
+  assert.deepEqual(spellingClue("colour"), { first: "c", count: 6 });
+  assert.deepEqual(spellingClue("café"), { first: "c", count: 4 });
+  assert.deepEqual(spellingClue("ice cream"), { first: "i", count: 8 });
+  assert.deepEqual(spellingClue("I"), { first: "", count: 1 }, "a clue must not reveal a complete one-letter target");
+});
+
+test("quiz choices, typing draft and already-graded feedback restore atomically", () => {
+  const storage = memory();
+  const options = normalizeOptions({ practice: "spelling" });
+  const attempt = { practice: "spelling", response: " BrIdGe ", correct: true, answeredAt: 100 };
+  const state = { options, progress: { bridge: answerProgress(null, true, "spelling", 100) },
+    session: { ids: ["bridge", "ticket"], index: 0, revealed: true, ratings: [], options, choices: [], draft: "", attempt } };
+  saveStudyState(state, storage);
+  const loaded = readStudyState(storage);
+  assert.deepEqual(loaded.session.attempt, attempt);
+  assert.equal(loaded.session.index, 0);
+  assert.equal(loaded.progress.bridge.answers, 1);
+  state.session.attempt = null; state.session.revealed = false; state.session.draft = " br";
+  saveStudyState(state, storage);
+  assert.equal(readStudyState(storage).session.draft, " br");
+  state.session.options.practice = "choice"; state.session.choices = ["ticket", "bridge"];
+  saveStudyState(state, storage);
+  assert.deepEqual(readStudyState(storage).session.choices, ["ticket", "bridge"]);
+});
+
+test("legacy options still default to flashcards and objective fields are bounded", () => {
+  assert.equal(normalizeOptions({ deck: "cet4" }).practice, "cards");
+  assert.equal(normalizeOptions({ practice: "invented" }).practice, "cards");
+  const storage = memory();
+  saveStudyState({ progress: { bridge: { seen: 2, answers: 2, correctAnswers: 999 } } }, storage);
+  assert.equal(readStudyState(storage).progress.bridge.correctAnswers, 2);
 });

@@ -9,6 +9,7 @@ const SCENARIO_IDS = new Set(SCENARIOS.map(v => v.id));
 const KEY = "asound.wordstudy.v1";
 const DAY = 86400000;
 const INTERVALS = [0, 1, 3, 7, 14, 30];
+export const PRACTICES = ["cards", "choice", "spelling"];
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
 const integer = (value, min, max) => Math.max(min, Math.min(max, Math.trunc(finite(value))));
@@ -20,7 +21,49 @@ export function normalizeOptions(value = {}) {
     topic: TOPIC_IDS.has(value.topic) ? value.topic : "",
     scenario: SCENARIO_IDS.has(value.scenario) ? value.scenario : "",
     size: [10, 20, 30].includes(Number(value.size)) ? Number(value.size) : 20,
+    practice: PRACTICES.includes(value.practice) ? value.practice : "cards",
   };
+}
+
+const meaningKey = value => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
+export const normalizeSpelling = value => String(value ?? "").normalize("NFC").trim().toLowerCase();
+export const spellingCorrect = (answer, term) => !!normalizeSpelling(answer) && normalizeSpelling(answer) === normalizeSpelling(term);
+
+// A dictionary-backed alternative is a valid answer to an ambiguous definition,
+// but does not establish recall of the target word. Let the learner try again.
+export function isAlternativeSpelling(answer, word, pool) {
+  const response = normalizeSpelling(answer);
+  if (!response || spellingCorrect(response, word.term)) return false;
+  const definition = meaningKey(word.meaning);
+  return !!definition && pool.some(candidate => candidate.id !== word.id
+    && spellingCorrect(response, candidate.term) && meaningKey(candidate.meaning) === definition);
+}
+
+export function spellingClue(term) {
+  const letters = String(term ?? "").normalize("NFC").match(/\p{L}/gu) || [];
+  // A one-letter word must not be revealed by its first-letter clue.
+  return { first: letters.length > 1 ? letters[0] : "", count: letters.length };
+}
+
+// Distractors come from the selected real word pool. Equal definitions appear only once.
+export function meaningChoices(word, pool, rng = Math.random) {
+  const shuffled = [...pool];
+  const shuffle = rows => {
+    for (let i = rows.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.max(0, Math.min(1 - Number.EPSILON, finite(rng()))) * (i + 1));
+      [rows[i], rows[j]] = [rows[j], rows[i]];
+    }
+    return rows;
+  };
+  const selected = [word];
+  const definitions = new Set([meaningKey(word.meaning)]);
+  for (const candidate of shuffle(shuffled)) {
+    const key = meaningKey(candidate.meaning);
+    if (!key || candidate.id === word.id || definitions.has(key)) continue;
+    definitions.add(key); selected.push(candidate);
+    if (selected.length === 4) break;
+  }
+  return shuffle(selected);
 }
 
 export function filterWords(words, options = {}) {
@@ -54,7 +97,31 @@ export function gradeProgress(previous, rating, now = Date.now()) {
   const before = integer(old.box, 0, 5);
   const box = rating === "good" ? Math.min(5, before + 1) : rating === "hard" ? Math.max(1, before - 1) : 0;
   const interval = rating === "good" ? INTERVALS[box] * DAY : rating === "hard" ? DAY : 600000;
-  return { box, due: now + interval, seen: integer(old.seen, 0, 1000000) + 1, reviewedAt: now };
+  const next = { box, due: now + interval, seen: integer(old.seen, 0, 1000000) + 1, reviewedAt: now };
+  if (Number.isInteger(old.answers) && old.answers > 0) {
+    next.answers = integer(old.answers, 1, 1000000);
+    next.correctAnswers = integer(old.correctAnswers, 0, next.answers);
+    next.lastPractice = ["choice", "spelling"].includes(old.lastPractice) ? old.lastPractice : "choice";
+    next.lastAnswerCorrect = old.lastAnswerCorrect === true;
+  }
+  return next;
+}
+
+export function answerProgress(previous, correct, practice, now = Date.now()) {
+  if (typeof correct !== "boolean" || !["choice", "spelling"].includes(practice)) throw new Error("Invalid exercise answer");
+  const old = object(previous) ? previous : {};
+  const next = gradeProgress(old, correct ? "good" : "again", now);
+  next.answers = integer(old.answers, 0, 999999) + 1;
+  next.correctAnswers = Math.min(next.answers, integer(old.correctAnswers, 0, next.answers - 1) + Number(correct));
+  next.lastPractice = practice;
+  next.lastAnswerCorrect = correct;
+  return next;
+}
+
+function cleanAttempt(value) {
+  if (!object(value) || !["choice", "spelling"].includes(value.practice) || typeof value.correct !== "boolean"
+      || typeof value.response !== "string" || value.response.length > 300) return null;
+  return { practice: value.practice, response: value.response, correct: value.correct, answeredAt: Math.max(0, finite(value.answeredAt)) };
 }
 
 function cleanState(value) {
@@ -64,6 +131,12 @@ function cleanState(value) {
     if (!id || id.length > 100 || !object(entry) || !(entry.seen > 0)) continue;
     progress[id] = { box: integer(entry.box, 0, 5), due: Math.max(0, finite(entry.due)),
       seen: integer(entry.seen, 1, 1000000), reviewedAt: Math.max(0, finite(entry.reviewedAt)) };
+    if (Number.isInteger(entry.answers) && entry.answers > 0) {
+      progress[id].answers = integer(entry.answers, 1, 1000000);
+      progress[id].correctAnswers = integer(entry.correctAnswers, 0, progress[id].answers);
+      progress[id].lastPractice = ["choice", "spelling"].includes(entry.lastPractice) ? entry.lastPractice : "choice";
+      progress[id].lastAnswerCorrect = entry.lastAnswerCorrect === true;
+    }
   }
   const candidate = raw.session;
   let session = null;
@@ -73,8 +146,12 @@ function cleanState(value) {
       && Number.isInteger(candidate.index) && candidate.index >= 0 && candidate.index <= candidate.ids.length) {
     session = { ids: [...candidate.ids], index: candidate.index, revealed: candidate.revealed === true,
       ratings: Array.isArray(candidate.ratings) ? candidate.ratings.filter(row => object(row)
-        && candidate.ids.includes(row.id) && ["good", "hard", "again"].includes(row.rating)).slice(0, candidate.ids.length) : [],
-      options: normalizeOptions(candidate.options), mode: candidate.mode === "review" ? "review" : "random" };
+        && candidate.ids.includes(row.id) && ["good", "hard", "again"].includes(row.rating)).slice(0, candidate.ids.length)
+        .map(row => ({ id: row.id, rating: row.rating, ...(cleanAttempt(row) || {}) })) : [],
+      options: normalizeOptions(candidate.options), mode: candidate.mode === "review" ? "review" : "random",
+      choices: Array.isArray(candidate.choices) ? candidate.choices.filter(id => typeof id === "string" && id.length <= 100).slice(0, 4) : [],
+      draft: typeof candidate.draft === "string" ? candidate.draft.slice(0, 300) : "",
+      attempt: cleanAttempt(candidate.attempt) };
   }
   return { options: normalizeOptions(raw.options), progress, session };
 }

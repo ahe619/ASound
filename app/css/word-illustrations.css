@@ -1,0 +1,5 @@
+.ws-illustration { width: min(100%, 420px); margin: 2px auto 0; border: 1px solid var(--line); border-radius: 15px; overflow: hidden; background: var(--surface-2); }
+.ws-illustration img { display: block; width: 100%; height: auto; }
+.ws-illustration figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 10px 12px; color: var(--ink); text-align: left; font-size: 13px; line-height: 1.5; }
+.ws-illustration-label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+@media (max-width: 600px) { .ws-illustration { width: min(100%, 320px); } }

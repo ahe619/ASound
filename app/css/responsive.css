@@ -25,6 +25,9 @@ body { height: 100dvh; height: var(--app-viewport-height, 100dvh); }
 .engine-list li { flex-wrap: wrap; }
 .layout-controls { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .layout-controls button { min-width: 0; padding-inline: 6px; }
+.download-options > summary, .pack-details > summary { cursor: pointer; padding-block: 8px; }
+.download-options[open] > .stack-xs { margin-top: 10px; }
+.pack-details[open] > p { padding-block: 4px; }
 
 /* Coarse pointers need the same touch targets on tablets and wide phones. */
 @media (pointer: coarse) {

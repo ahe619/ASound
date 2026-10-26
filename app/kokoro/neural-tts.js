@@ -32,7 +32,8 @@ self.fetch = (input, init) => {
   return realFetch(input, init);
 };
 let tts = null;
-const hasNaN = (a) => { for (let i = 0; i < a.length; i += 97) if (Number.isNaN(a[i])) return true; return false; };
+let generationQueue = Promise.resolve();
+const invalidAudio = (a) => { for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i])) return true; return false; };
 self.onmessage = async (e) => {
   const m = e.data;
   if (m.type === "init") {
@@ -42,27 +43,32 @@ self.onmessage = async (e) => {
       const mod = await import(BASE + "kokoro.web.js");
       mod.env.wasmPaths = BASE + "ortlib/";
       tts = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: m.dtype, device: m.device });
-      const warm = await tts.generate("Hello there.", { voice: "af_heart" });
-      if (hasNaN(warm.audio)) throw new Error("the voice model produced invalid audio on this device");
       postMessage({ type: "ready", ms: Math.round(performance.now() - t0), device: m.device, dtype: m.dtype });
     } catch (err) {
       postMessage({ type: "error", error: String((err && err.message) || err) });
     }
   } else if (m.type === "gen") {
-    try {
-      const t0 = performance.now();
-      const out = await tts.generate(m.text, { voice: m.voice, speed: m.speed });
-      const pcm = out.audio;
-      postMessage({ type: "audio", id: m.id, pcm, sr: out.sampling_rate, ms: Math.round(performance.now() - t0) }, [pcm.buffer]);
-    } catch (err) {
-      postMessage({ type: "genError", id: m.id, error: String((err && err.message) || err) });
-    }
+    // One inference at a time on the shared WASM session. Validate the requested
+    // audio instead of spending the first playback on an extra test sentence.
+    generationQueue = generationQueue.then(async () => {
+      try {
+        const t0 = performance.now();
+        const out = await tts.generate(m.text, { voice: m.voice, speed: m.speed });
+        const pcm = out.audio;
+        if (invalidAudio(pcm)) throw new Error("the voice model produced invalid audio on this device");
+        postMessage({ type: "audio", id: m.id, pcm, sr: out.sampling_rate, ms: Math.round(performance.now() - t0) }, [pcm.buffer]);
+      } catch (err) {
+        postMessage({ type: "genError", id: m.id, error: String((err && err.message) || err) });
+      }
+    });
   }
 };
 `;
 
 let worker = null;
 let readyPromise = null;
+let rejectStart = null;
+let revision = 0;
 let where = { mode: "desktop" };
 
 // Where the files are (from js/packs.js): {mode: "desktop"} or {mode: "web", base, cache, canon}.
@@ -70,7 +76,8 @@ export function configure(cfg) {
   const next = cfg && cfg.mode === "web" ? { mode: "web", base: cfg.base, cache: cfg.cache, canon: cfg.canon } : { mode: "desktop" };
   if (JSON.stringify(next) === JSON.stringify(where)) return;
   where = next;
-  if (worker) { try { worker.terminate(); } catch {} worker = null; readyPromise = null; state = "off"; emit(); }
+  reset(new Error("voice configuration changed"));
+  emit();
 }
 let state = "off";            // off | loading | ready | error
 let lastError = "";
@@ -79,17 +86,58 @@ let seq = 0;
 const pending = new Map();
 const listeners = new Set();
 const cache = new Map();      // `${voice}|${speed}|${text}` -> {pcm, sr}
+const inFlight = new Map();   // identical pending requests share one inference
+const MAX_CACHE_BYTES = 16 * 1024 * 1024;
+let cacheBytes = 0;
+
+function reset(error) {
+  revision++;
+  if (worker) { try { worker.terminate(); } catch {} }
+  worker = null;
+  if (rejectStart) rejectStart(error);
+  rejectStart = null;
+  readyPromise = null;
+  for (const p of pending.values()) p.reject(error);
+  pending.clear();
+  inFlight.clear();
+  cache.clear();
+  cacheBytes = 0;
+  state = "off";
+  engine = "";
+  lastError = "";
+}
+
+function remember(key, out) {
+  if (out.pcm.byteLength > MAX_CACHE_BYTES) return;
+  cache.set(key, out);
+  cacheBytes += out.pcm.byteLength;
+  while (cache.size > 150 || cacheBytes > MAX_CACHE_BYTES) {
+    const oldest = cache.keys().next().value;
+    cacheBytes -= cache.get(oldest).pcm.byteLength;
+    cache.delete(oldest);
+  }
+}
 
 const emit = () => listeners.forEach((fn) => { try { fn(status()); } catch {} });
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function status() { return { state, error: lastError, engine, loaded: state === "ready" ? 1 : 0, total: 1 }; }
+export function dispose() {
+  reset(new Error("voice removed"));
+  emit();
+}
 
 function start(device, dtype) {
   return new Promise((resolve, reject) => {
-    worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })), { type: "module", name: "kokoro-tts" });
-    worker.onmessage = (e) => {
+    const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+    let current;
+    try { current = new Worker(url, { type: "module", name: "kokoro-tts" }); }
+    finally { URL.revokeObjectURL(url); }
+    worker = current;
+    rejectStart = reject;
+    current.onmessage = (e) => {
+      if (worker !== current) return;
       const m = e.data;
-      if (m.type === "ready") resolve(m);
+      if (m.type === "ready") { rejectStart = null; resolve(m); }
       else if (m.type === "error") reject(new Error(m.error));
       else if (m.type === "audio" || m.type === "genError") {
         const p = pending.get(m.id);
@@ -99,40 +147,39 @@ function start(device, dtype) {
         else p.reject(new Error(m.error));
       }
     };
-    worker.onerror = (e) => reject(new Error(e.message || "voice worker failed"));
-    worker.postMessage({ type: "init", device, dtype, where });
+    current.onerror = (e) => {
+      if (worker !== current) return;
+      const error = new Error(e.message || "voice worker failed");
+      reset(error);
+      state = "error";
+      lastError = error.message;
+      emit();
+    };
+    current.postMessage({ type: "init", device, dtype, where });
   });
 }
 
 export function load() {
   if (readyPromise) return readyPromise;
+  const mine = revision;
   state = "loading";
+  lastError = "";
   emit();
   readyPromise = (async () => {
     // WebGPU output was unreliable on an NVIDIA RTX 50 (NaN audio, even in fp32), so the browser fallback uses
     // the CPU only. The main path is the native engine behind /api/tts (see server.py).
-    const plans = [["wasm", "q8"]];
-    let lastErr = null;
-    for (const [device, dtype] of plans) {
-      try {
-        const r = await start(device, dtype);
-        engine = `${device}/${dtype}`;
-        state = "ready";
-        emit();
-        return r.ms;
-      } catch (err) {
-        lastErr = err;
-        try { worker && worker.terminate(); } catch {}
-        worker = null;
-      }
-    }
-    throw lastErr;
+    const r = await start("wasm", "q8");
+    if (mine !== revision) throw new Error("voice configuration changed");
+    engine = "wasm/q8";
+    state = "ready";
+    emit();
+    return r.ms;
   })().catch((err) => {
+    // A cancelled older load must not reset a replacement worker's state.
+    if (mine !== revision) throw err;
+    reset(err);
     state = "error";
     lastError = String((err && err.message) || err);
-    readyPromise = null;
-    for (const p of pending.values()) p.reject(err);
-    pending.clear();
     emit();
     throw err;
   });
@@ -142,15 +189,22 @@ export function load() {
 export async function synthesize(text, { voice = "af_heart", speed = 1 } = {}) {
   const key = `${voice}|${speed}|${text}`;
   if (cache.has(key)) { const hit = cache.get(key); cache.delete(key); cache.set(key, hit); return hit; }
-  await load();
-  const id = ++seq;
-  const out = await new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    worker.postMessage({ type: "gen", id, text, voice, speed });
-  });
-  cache.set(key, out);
-  if (cache.size > 150) cache.delete(cache.keys().next().value);
-  return out;
+  if (inFlight.has(key)) return inFlight.get(key);
+  const mine = revision;
+  const promise = (async () => {
+    await load();
+    if (mine !== revision) throw new Error("voice configuration changed");
+    const id = ++seq;
+    const out = await new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      worker.postMessage({ type: "gen", id, text, voice, speed });
+    });
+    if (mine !== revision) throw new Error("voice configuration changed");
+    remember(key, out);
+    return out;
+  })().finally(() => { if (inFlight.get(key) === promise) inFlight.delete(key); });
+  inFlight.set(key, promise);
+  return promise;
 }
 
 // Testing hook: load one specific engine.

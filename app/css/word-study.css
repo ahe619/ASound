@@ -45,6 +45,27 @@
 .ws-grade.again { background: var(--pen-red-soft); color: var(--pen-red); border-color: transparent; }
 .ws-grade:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .ws-card-footer { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+.ws-question-title { font-size: 23px; line-height: 1.4; }
+.ws-practice-spelling { min-height: 0; }
+.ws-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; text-align: left; }
+.ws-option { display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-start; text-align: left; padding: 14px; min-height: 64px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.ws-option:hover:not(:disabled) { border-color: var(--blue); background: var(--blue-soft); }
+.ws-option:disabled { opacity: 1; cursor: default; }
+.ws-option-letter { display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; border-radius: 8px; background: var(--surface-2); color: var(--muted); font-weight: 700; }
+.ws-option-meaning { flex: 1 1 100px; min-width: 0; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.ws-option-result { display: flex; align-items: center; gap: 5px; width: 100%; font-size: 13px; font-weight: 700; }
+.ws-option.is-correct { border-color: var(--pen-green); background: var(--pen-green-soft); color: var(--pen-green); }
+.ws-option.is-wrong { border-color: var(--pen-red); background: var(--pen-red-soft); color: var(--pen-red); }
+.ws-spelling-form { display: flex; flex-direction: column; gap: 10px; width: 100%; text-align: left; scroll-margin-block: 16px; }
+.ws-spelling-input { width: 100%; min-width: 0; min-height: 54px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 12px 14px; color: var(--ink); font: 20px/1.4 var(--font-en); scroll-margin-block: 20px; }
+.ws-spelling-input:focus { border-color: var(--blue); }
+.ws-spelling-form .btn { width: 100%; }
+.ws-feedback { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 15px; border-radius: 12px; text-align: left; scroll-margin-block: 16px; overflow-wrap: anywhere; }
+.ws-feedback > strong { display: flex; gap: 7px; align-items: center; font-size: 18px; }
+.ws-feedback.is-correct { background: var(--pen-green-soft); color: var(--pen-green); }
+.ws-feedback.is-wrong { background: var(--pen-red-soft); color: var(--pen-red); }
+.ws-feedback .hint-line { color: inherit; }
+.word-study:has(.ws-spelling-form) { padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
 .ws-finished { align-items: center; text-align: center; padding: 30px 20px; border-radius: 22px; gap: 16px; }
 .ws-finished-mark { display: grid; place-items: center; width: 58px; height: 58px; border-radius: 50%; background: var(--pen-green-soft); color: var(--pen-green); }
 .ws-finished-mark .ic { width: 28px; height: 28px; }
@@ -54,6 +75,8 @@
 .ws-results strong { font-size: 28px; color: var(--blue); }
 .ws-results span { color: var(--muted); font-size: 13px; }
 @media (max-width: 520px) {
+  .ws-options { grid-template-columns: minmax(0, 1fr); }
+  .ws-option { min-height: 58px; padding: 12px; }
   .ws-decks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ws-deck { min-height: 80px; padding: 13px; }
   .ws-intro .title { font-size: 25px; }

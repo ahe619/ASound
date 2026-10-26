@@ -2,7 +2,7 @@
 //   natural - Chatterbox on an NVIDIA GPU through the local server (optional; most human-sounding, slower)
 //   native  - Kokoro through kokoro-onnx in the local server (POST /api/tts): fast, all CPU threads
 //   browser - Kokoro in the page (kokoro/neural-tts.js, 8-bit on WebAssembly): slower fallback
-//   system  - the browser's own voices (speechSynthesis): last resort
+//   system  - the browser's own voices (speechSynthesis): mobile automatic default when English is available
 import { prefs } from "./state.js";
 import { h, icon, str, sentences, clamp } from "./util.js";
 import { t } from "./i18n.js";
@@ -51,29 +51,36 @@ let speakingBtn = null;
 let unlocked = false;
 const nativeCache = new Map();
 let browserMod = null;
+let browserModulePromise = null;
 let voiceConfig = null;
 
 // A display mode does not change device capabilities. WebAssembly works without CUDA.
 export function speechEngineOrder({ preference = "auto", mobile = false, native = false,
-  browser = false, system = false, natural = "absent" } = {}) {
+  browser = false, system = false, systemEnglish = false, natural = "absent" } = {}) {
   if (preference === "system") return system ? ["system"] : [];
   const standard = (mobile ? ["browser", "native"] : ["native", "browser"])
     .filter(engine => engine === "native" ? native : browser);
-  if (system) standard.push("system");
+  if (system) {
+    // Installing an optional voice pack must not make ordinary mobile playback heavier.
+    // An explicit voice choice still uses the downloaded voices first.
+    if (preference === "auto" && mobile && systemEnglish) standard.unshift("system");
+    else standard.push("system");
+  }
   if (preference === "natural" && native && natural === "ready") standard.unshift("natural");
   return standard;
 }
 
 export function voiceCapabilities() {
   const mobile = deviceInfo().mobile;
-  const system = !!synth && (systemVoices.length > 0 || systemVoicesPending);
+  const systemEnglish = systemVoices.length > 0;
+  const system = !!synth && (systemEnglish || systemVoicesPending);
   const native = status.native === true;
   const browser = !!voiceConfig;
   const natural = native && ["off", "loading", "ready"].includes(status.natural);
   return {
-    mobile, system, systemEnglish: systemVoices.length > 0, systemPending: !!synth && systemVoicesPending,
+    mobile, system, systemEnglish, systemPending: !!synth && systemVoicesPending,
     native, browser, natural, canNatural: natural,
-    effective: speechEngineOrder({ preference: prefs.voiceEngine, mobile, native, browser, system, natural: status.natural })[0] || "",
+    effective: speechEngineOrder({ preference: prefs.voiceEngine, mobile, native, browser, system, systemEnglish, natural: status.natural })[0] || "",
   };
 }
 
@@ -201,7 +208,10 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
 
 async function route(text, mine, rate, voice, done) {
   // System speech can start immediately even if a static host's health check is pending.
-  if (prefs.voiceEngine !== "system" && status.native === null) await healthCheck;
+  loadSystemVoices();
+  const initial = voiceCapabilities();
+  const quickSystem = prefs.voiceEngine === "system" || (prefs.voiceEngine === "auto" && initial.mobile && initial.systemEnglish);
+  if (!quickSystem && status.native === null) await healthCheck;
   if (mine !== seq) return;
   loadSystemVoices();
   const capabilities = voiceCapabilities();
@@ -214,6 +224,7 @@ async function route(text, mine, rate, voice, done) {
       else if (engine === "native") await playAudio(text, mine, rate, voice, done, nativeChunk);
       else if (engine === "browser") await playAudio(text, mine, rate, voice, done, browserChunk);
       else if (engine === "system") playSystem(text, mine, rate, done);
+      if (mine !== seq) return;
       if (status.engine !== engine) { status.engine = engine; emit(); }
       return;
     } catch (e) {
@@ -259,20 +270,29 @@ async function naturalChunk(text, rate, voice) {
 
 // Where the in-page voice finds its files (js/packs.js engineConfig): this computer, or the download cache.
 export function configureVoice(cfg) {
+  if (JSON.stringify(cfg || null) !== JSON.stringify(voiceConfig)) stopSpeaking();
   voiceConfig = cfg || null;
   if (browserMod && browserMod.configure && cfg) browserMod.configure(cfg);
+  if (!cfg && browserMod?.dispose) browserMod.dispose();
   if (!cfg) status.browser = "off";
   emit();
 }
 
-async function browserChunk(text, rate, voice) {
+async function browserChunk(text, rate, voice, mine) {
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
-  if (!browserMod) {
-    browserMod = await import("../kokoro/neural-tts.js");
-    if (voiceConfig && browserMod.configure) browserMod.configure(voiceConfig);
-    browserMod.onStatus((s) => { status.browser = s.state; emit(); });
+  if (!browserModulePromise) {
+    browserModulePromise = import("../kokoro/neural-tts.js").then(mod => {
+      browserMod = mod;
+      if (voiceConfig && mod.configure) mod.configure(voiceConfig);
+      mod.onStatus((s) => { status.browser = s.state; emit(); });
+      return mod;
+    }).catch(error => { browserModulePromise = null; throw error; });
   }
+  await browserModulePromise;
+  if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
+  if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
   const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+  if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
   const a = ctx();
   const buf = a.createBuffer(1, pcm.length, sr);
   buf.copyToChannel(pcm, 0);
@@ -288,7 +308,8 @@ async function playAudio(text, mine, rate, voice, done, chunk) {
   const parts = chunk === nativeChunk && text.length <= 600 ? [text] : sentences(text);
   let at = 0, last = null;
   for (const part of parts) {
-    const buf = await chunk(part, rate, voice);
+    if (mine !== seq) return;
+    const buf = await chunk(part, rate, voice, mine);
     if (mine !== seq) return;
     const src = a.createBufferSource();
     src.buffer = buf;

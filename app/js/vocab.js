@@ -8,21 +8,26 @@ import { micButton } from "./mic.js";
 import { readingMatch } from "./diff.js";
 import { confirmInline, fmtDay } from "./widgets.js";
 import { renderWordStudy, cleanupWordStudy, isWordStudyActive } from "./word-study.js";
+import { navigate, goBack, currentRoute, registerTabDetail } from "./nav.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const INTERVALS = [0, 1 * DAY, 3 * DAY, 7 * DAY, 14 * DAY, 30 * DAY]; // by box 0..5
 let query = "";
 let review = null; // {ids, idx, revealed, heard}
 let section = "study";
+registerTabDetail("vocab", detail => {
+  const next = detail === "saved" || detail === "saved-review" ? "saved" : "study";
+  const changed = next !== section;
+  section = next;
+  if (changed || next === "saved") renderVocab();
+});
 
 function sections() {
   return h("nav", { class: "seg", "aria-label": t("vocab.sections") }, ["study", "saved"].map(id =>
     h("button", { type: "button", "aria-pressed": String(section === id), onclick: () => {
       if (section === id) return;
       cleanupVocab();
-      review = null;
-      section = id;
-      renderVocab();
+      navigate({ tab: "vocab", detail: id === "study" ? "setup" : "saved" });
     } }, t(`vocab.section.${id}`))));
 }
 
@@ -41,7 +46,7 @@ export function renderVocab() {
     renderWordStudy(root);
     return;
   }
-  if (review) { renderReview(); return; }
+  if (review && currentRoute().detail === "saved-review") { renderReview(); return; }
   const all = vocab.all();
   const due = vocab.due();
   const q = query.toLowerCase();
@@ -91,7 +96,7 @@ function startReview() {
   const ids = vocab.due().sort(() => Math.random() - 0.5).slice(0, 20).map((v) => v.id);
   if (!ids.length) return;
   review = { ids, idx: 0, revealed: false, heard: "", done: 0 };
-  renderReview();
+  navigate({ tab: "vocab", detail: "saved-review" });
 }
 
 function current() {
@@ -108,7 +113,7 @@ function renderReview() {
   const mic = micButton({ big: true, label: t("review.sayIt"), onText: (heard) => { review.heard = heard; review.revealed = true; renderReview(); } });
   const parts = [
     h("header", { class: "sum-head" },
-      h("button", { type: "button", class: "btn quiet back", onclick: () => { review = null; renderVocab(); } }, icon("back"), t("review.stop")),
+      h("button", { type: "button", class: "btn quiet back", onclick: () => goBack({ tab: "vocab", detail: "saved" }) }, icon("back"), t("review.stop")),
       h("p", { class: "eyebrow" }, t("review.eyebrow")),
       h("p", { class: "progress" }, t("review.progress", { n: review.idx + 1, total: review.ids.length }))),
   ];

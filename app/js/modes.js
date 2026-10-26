@@ -3,7 +3,7 @@
 import { state } from "./state.js";
 import { $, h, icon } from "./util.js";
 import { t, addStrings } from "./i18n.js";
-import { show, setTab, registerTabCleanup } from "./nav.js";
+import { navigate, goBack, currentRoute, registerTab, registerTabCleanup } from "./nav.js";
 import { stopSpeaking } from "./speech.js";
 import { handsFree } from "./mic.js";
 
@@ -13,7 +13,6 @@ const MODES = [
   { id: "ladder", where: "accent", icon: "speaker", load: () => import("./feat-ladder.js") },
 ];
 
-let back = "talk";
 let version = 0;
 let dispose = null;
 const styles = new Map();
@@ -24,9 +23,18 @@ let initialized = null;
 export function initModes() {
   if (!initialized) {
     registerTabCleanup("mode", disposeMode);
-    // Return to the parent tab before a page enters the back/forward cache, so restoring
-    // it never revives an empty mode view or a recording that was already cancelled.
-    window.addEventListener("pagehide", () => { if (state.tab === "mode") closeMode(); });
+    registerTab("mode", route => {
+      const mode = MODES.find(m => m.id === route.mode);
+      if (mode) renderMode(mode);
+    });
+    // Stop recording on exit without moving browser history during pagehide.
+    window.addEventListener("pagehide", () => { if (state.tab === "mode") disposeMode(); });
+    window.addEventListener("pageshow", event => {
+      if (event.persisted && state.tab === "mode") {
+        const mode = MODES.find(m => m.id === currentRoute().mode);
+        if (mode) renderMode(mode);
+      }
+    });
     initialized = Promise.all(MODES.map(async (m) => {
       const res = await fetch(`locales/feat/${m.id}.json`);
       if (!res.ok) throw new Error(`missing practice strings: ${m.id}`);
@@ -66,8 +74,11 @@ export function modeCards(where) {
       h("span", { class: "mode-text" }, h("strong", null, t(`${m.id}.title`)), h("span", { class: "hint-line" }, t(`${m.id}.pitch`)))))));
 }
 
-async function openMode(m) {
-  back = state.tab;
+function openMode(m) {
+  navigate({ tab: "mode", mode: m.id, from: m.where });
+}
+
+async function renderMode(m) {
   disposeMode();
   handsFree.stop();
   const mine = version;
@@ -75,8 +86,6 @@ async function openMode(m) {
   root.replaceChildren(h("button", { type: "button", class: "btn quiet back", onclick: closeMode }, icon("back"), t("models.back")),
     h("h1", { class: "title" }, t(`${m.id}.title`)));
   root.setAttribute("aria-busy", "true");
-  state.tab = "mode";
-  show();
   $("#view-mode").scrollTop = 0;
   try {
     const [mod] = await Promise.all([m.load(), loadStyle(m.id), initModes()]);
@@ -103,5 +112,5 @@ function disposeMode() {
 }
 
 function closeMode() {
-  setTab(back === "mode" ? "talk" : back);
+  goBack({ tab: currentRoute().from === "accent" ? "accent" : "talk" });
 }

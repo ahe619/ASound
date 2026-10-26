@@ -10,12 +10,24 @@ import { activePacks, packById, packStatus, variant, onPacks } from "./packs.js"
 import { showModels, voiceDownloadCard } from "./models.js";
 import { getLayoutMode, setLayoutMode, layoutInfo, onLayoutChange } from "./device.js";
 import { updateStatus, onUpdateStatus, checkForUpdates, applyUpdate } from "./updates.js";
+import { currentRoute, navigate, goBack, registerOverlay } from "./nav.js";
 
 let onLanguageChange = null;
 let announcedVersion = "";
 let voiceSignature = "";
 export function initSettings({ languageChanged }) {
   onLanguageChange = languageChanged;
+  registerOverlay("settings", (visible, { restore }) => {
+    if (visible) {
+      if ($("#settings").hidden) render();
+      $("#settings").hidden = false;
+      if (!restore) $("#settings-close").focus({ preventScroll: true });
+    } else {
+      const hadFocus = $("#settings").contains(document.activeElement);
+      $("#settings").hidden = true;
+      if (hadFocus) $("#settings-open").focus({ preventScroll: true });
+    }
+  });
   $("#settings-open").append(icon("gear"));
   $("#settings-open").addEventListener("click", openSettings);
   $("#settings").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeSettings(); });
@@ -34,13 +46,12 @@ export function initSettings({ languageChanged }) {
 }
 
 export function openSettings() {
-  render();
-  $("#settings").hidden = false;
-  $("#settings-close").focus();
+  navigate({ ...currentRoute(), overlay: "settings" });
 }
 function closeSettings() {
-  $("#settings").hidden = true;
-  $("#settings-open").focus();
+  const route = currentRoute();
+  delete route.overlay;
+  goBack(route);
 }
 
 function select(id, options, current, onPick) {
@@ -100,7 +111,7 @@ function render() {
       h("span", { class: "field-label" }, t("settings.engines")),
       h("ul", { class: "engine-list", id: "engine-list" }),
       h("p", { class: "hint-line" }, t("settings.offline")),
-      h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => { closeSettings(); showModels(); } }, icon("box"), t("settings.models")))),
+      h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => showModels() }, icon("box"), t("settings.models")))),
     h("section", { class: "stack-xs", id: "app-updates", "aria-live": "polite" }),
     h("p", { class: "hint-line" }, t("settings.licenses")));
   paintEngines();
@@ -188,7 +199,6 @@ function paintEngines() {
   const list = $("#engine-list");
   if (!list) return;
   const ai = aiStatus();
-  const sp = speechStatus();
   const mic = window.ASoundMic ? window.ASoundMic.status() : { asr: "off" };
   const aiText = ai.state === "ready" ? t("engine.ready") : ai.state === "loading" ? t("engine.loading", { pct: Math.floor((ai.progress || 0) * 100) }) : ai.state === "error" ? t("engine.error", { error: ai.error }) : t("engine.idle");
   const cap = voiceCapabilities();
@@ -196,7 +206,7 @@ function paintEngines() {
     : cap.effective === "natural" ? t("natural.ready") : cap.browser ? t("engine.voiceBrowser") : t("engine.none");
   const asrText = mic.asr === "ready" ? t("engine.ready") : mic.asr === "loading" ? t("engine.loadingShort") : mic.asr === "error" ? t("engine.error", { error: mic.error }) : t("engine.idle");
   const a = activePacks();
-  const name = (g) => (g && packById(variant(g)) ? packById(variant(g)).name : t("engine.none"));
+  const name = (g) => (g && packById(variant(g)) ? t(`pack.${g}.name`) : t("engine.none"));
   fill(list,
     h("li", null, h("b", null, t("engine.llm")), h("span", null, `${name(a.llm)} \u00b7 ${aiText}`)),
     h("li", null, h("b", null, t("engine.voice")), h("span", null, spText)),

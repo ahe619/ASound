@@ -42,14 +42,15 @@ paint('talk');show(); window.harness={setLanguage,setTab,paint,t};
   if(rel==='') return route.fulfill({contentType:'text/html',body:harness});
   if(rel==='js/speech.js') return route.fulfill({contentType:'text/javascript',body:speech});
   if(rel==='js/ai.js') return route.fulfill({contentType:'text/javascript',body:ai});
+  if(rel==='js/packs.js') return route.fulfill({contentType:'text/javascript',body:'export const activePacks=()=>({llm:"llm-cpu",asr:"asr-tiny"});'});
   if(rel==='js/feat-retell.js' && holdRetell) await holdRetell;
   try { const body=await fs.readFile(path.join(app,rel)); await route.fulfill({body,contentType:rel.endsWith('.js')?'text/javascript':rel.endsWith('.json')?'application/json':rel.endsWith('.css')?'text/css':'application/octet-stream'}); }
   catch { await route.fulfill({status:404,body:'Missing test resource'}); }
  });
  await page.addInitScript(()=>{
-  window.pending=[];window.stops=0;window.cancels=0;window.recording=false;
+  window.pending=[];window.stops=0;window.cancels=0;window.recording=false;window.claude={};
   window.ASoundMic={supported:true,RATE:16000,preload(){},cancel(){window.cancels++;window.recording=false},pause(){},resume(){},
-   async record(){window.recording=true},async stop(){window.recording=false;return {text:'Test recording',audio:new Float32Array(16000)}}};
+   async record(){window.recording=true},async stop(){window.recording=false;return {text:'Test recording',audio:new Float32Array(16000)}},async transcribe(){return 'Test recording'}};
   const st=window.setTimeout.bind(window),ct=window.clearTimeout.bind(window),si=window.setInterval.bind(window),ci=window.clearInterval.bind(window);
   window.testTimeouts=new Map();window.testIntervals=new Map();
   window.setTimeout=(fn,ms,...args)=>{const id=st(()=>{testTimeouts.delete(id);fn(...args)},ms);testTimeouts.set(id,ms);return id};
@@ -105,8 +106,12 @@ paint('talk');show(); window.harness={setLanguage,setTab,paint,t};
   await page.click('#tab-accent');await page.locator('#accent .mode-card').click();
   await page.locator('#mode .back').click();assert.equal(await page.locator('#view-accent').isVisible(),true);
   await page.locator('#accent .mode-card').click();await page.waitForSelector('#ladder-start');
+  const beforeRestore=await page.evaluate(()=>({length:history.length,href:location.href}));
   await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})));
-  assert.equal(await page.locator('#view-accent').isVisible(),true);assert.equal(await page.locator('#mode').innerText(),'');
+  assert.equal(await page.locator('#view-mode').isVisible(),true);assert.equal(await page.locator('#mode').innerText(),'');
+  await page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+  await page.waitForSelector('#ladder-start');
+  assert.deepEqual(await page.evaluate(()=>({length:history.length,href:location.href})),beforeRestore);
   assert.deepEqual(errors,[]);
   console.log('PASS: mode cards, en/zh strings, CSS, lazy-load cancellation, retell model/recording cancellation, phone timer teardown, ladder cancellation, back navigation; no browser errors.');
  } finally {await browser.close()}

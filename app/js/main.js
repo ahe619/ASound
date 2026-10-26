@@ -2,7 +2,7 @@
 import { prefs, state } from "./state.js";
 import { $, h } from "./util.js";
 import { setLanguage, applyI18n, t } from "./i18n.js";
-import { registerTab, registerTabCleanup, setTab, show } from "./nav.js";
+import { registerTab, registerTabCleanup, setTab, show, initNavigation } from "./nav.js";
 import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
@@ -16,7 +16,7 @@ import { initUpdates } from "./updates.js";
 import { startEngines } from "./engines.js";
 import { showModels, renderModels } from "./models.js";
 import { initModes } from "./modes.js";
-import { initLayout } from "./device.js";
+import { initLayout, deviceInfo } from "./device.js";
 
 function syncLabels() {
   if (window.ASoundAI) window.ASoundAI.setLabels({ loading: t("llm.loading"), error: t("llm.error"), noGpu: t("llm.noGpu") });
@@ -75,15 +75,21 @@ async function boot() {
     if (["accent", "vocab", "me"].includes(hash)) setTab(hash);
     show();
     warmUp();
-    if (window.ASoundMic) window.ASoundMic.preload();
+    if (window.ASoundMic && !deviceInfo().mobile) window.ASoundMic.preload();
   };
-  // First run (or models removed): set up the downloads before anything else.
+  // Web visitors can study words and use available system voices immediately.
+  // Optional conversation resources remain accessible from the settings screen.
   if (ready()) start();
+  else if (packMode() === "web") {
+    const hash = location.hash.slice(1);
+    setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
+  }
   else {
     showModels({ setup: true, onReady: start });
     // Text vocabulary study does not require downloading or starting any AI model.
     if (location.hash.slice(1) === "vocab") setTab("vocab");
   }
+  initNavigation();
 }
 
 // Installed as a web app (https): keep the app itself available offline.
