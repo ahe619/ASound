@@ -4,9 +4,9 @@
 
 试用方案采用静态网页托管，用户首次下载模型，在自己的设备上运行。仓库的工作流会从源码构建，只发布网页目录，不发布本机 Python 环境、模型权重或私人数据。网页运行所需的 JavaScript 会随网站公开。
 
-当前仓库为私有。本次创建 Pages 的 API 请求返回 `422`：当前账号方案不支持此仓库使用 GitHub Pages，未创建 Pages 站点。源码上传本身不能解除这一限制，也不代表网站上线。
+经用户明确授权，当前 `ahe619/ASound` 仓库已设为公开；GitHub Pages 已创建，发布来源为 GitHub Actions，仓库变量 `ASOUND_PAGES_ENABLED=true` 已启用并核验。
 
-GitHub Free 的 Pages 适用于公开仓库；私有仓库需要支持该能力的账号方案。要继续使用此仓库的免费 Pages，需要用户明确同意公开源码；也可以另选支持私有源码的托管平台。使用已有仓库并不自动授权公开整个源码库或购买套餐，此项目的构建工具和工作流不会修改仓库可见性或自动升级套餐。[GitHub Pages 可用范围](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
+平台网址预期为 `https://ahe619.github.io/ASound/`。启用发布配置不等于网页已可访问，仍需等待工作流部署成功并实际验收。`soundoa.cn` 尚未在 Pages 中绑定，本轮未配置其网站 DNS 或验证该域名的 HTTPS。没有购买或升级套餐。[GitHub Pages 可用范围](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
 ## 构建与上传
 
@@ -27,8 +27,8 @@ GitHub Free 的 Pages 适用于公开仓库；私有仓库需要支持该能力�
 
 ## 先验证平台网址
 
-1. 在 [`ahe619/ASound` 的 Settings → Pages](https://github.com/ahe619/ASound/settings/pages) 确认当前账号方案允许该仓库使用 Pages，再将发布来源设为 **GitHub Actions**。如果页面要求升级或公开仓库，先选择后续托管方案；已上传的源码仍然保留，不会因此上线。
-2. 在 **Settings → Secrets and variables → Actions → Variables** 添加仓库变量 `ASOUND_PAGES_ENABLED`，值为 `true`。未开启时工作流只检查和构建。
+1. [`ahe619/ASound` 的 Settings → Pages](https://github.com/ahe619/ASound/settings/pages) 已创建站点并选择 **GitHub Actions** 作为发布来源。
+2. **Settings → Secrets and variables → Actions → Variables** 中的仓库变量 `ASOUND_PAGES_ENABLED` 已设为 `true`。将来若关闭该变量，工作流只检查和构建。
 3. 推送到 `main`，或在 Actions 手动运行 **Check and publish ASound web**，等待构建、检查和部署成功。PR 和其他分支不会部署网站。
 4. 使用 Pages 设置页实际返回的 HTTPS 地址验收。默认项目地址预期为 `https://ahe619.github.io/ASound/`；这是预期地址，只有部署成功并实际访问后才能确认上线。
 5. 检查首页、背单词、模型下载入口、录音权限和更新提示，并让目标手机实际完成一次下载和对话。GitHub Pages 与模型镜像在中国大陆的可达性仍需分别测试。
@@ -43,9 +43,9 @@ GitHub Free 支持公开仓库的 Pages，Pages 可托管 HTML、CSS、JavaScrip
 此免费托管方案用于当前试用；若以后收费运营，需重新核对托管政策和用量。模型文件继续放在模型下载源，不能当作网页资产全部塞进 Pages。
 [GitHub Pages 限制](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)
 
-## 审核通过后绑定域名
+## 绑定 soundoa.cn
 
-按下面顺序操作，不要先把域名解析到一个尚未绑定的 Pages 站点。
+当前自定义域名尚未配置。先验收平台网址，再按下面顺序操作，不要先把域名解析到一个尚未绑定的 Pages 站点。
 
 1. 在 GitHub **个人账号 Settings → Pages → Add a domain** 添加 `soundoa.cn`。
 2. 按 GitHub 实际显示的名称和值，在域名解析控制台添加所有权验证 TXT 记录。通常记录名形如 `_github-pages-challenge-ahe619`；**记录值必须从当前账号页面复制，不能自行填写或猜测**。解析生效后回 GitHub 点击 Verify，验证成功后保留 TXT。

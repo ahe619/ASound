@@ -7,7 +7,8 @@ AI 仍在用户设备运行，模型继续从 `app/packs.json` 配置的 Hugging
 
 `soundoa.cn` 当前选择直接使用已有 `ahe619/ASound` 仓库，具体按 [soundoa.cn 上线准备](SOUNDOA_LAUNCH.md) 操作。
 源码仓库工作流运行 `tools/prepare_soundoa_site.py`，构建并校验小模型选项的网页，再仅发布 `dist/soundoa-site/site/`。
-必须先确认账号方案支持当前仓库可见性的 Pages，并启用下述部署变量；配置不会替用户公开仓库。
+经用户明确授权，仓库已公开，Pages 的 GitHub Actions 发布来源和 `ASOUND_PAGES_ENABLED=true` 已配置并核验。
+平台网址预期为 `https://ahe619.github.io/ASound/`，仍需部署成功后验收；`soundoa.cn` 的绑定、DNS 和 HTTPS 尚未配置完成。
 
 ## 已接好的更新流程
 
