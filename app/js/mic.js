@@ -67,8 +67,18 @@ export function micButton({ onText, onAudio, big = false, label, lang = "" } = {
     if (state === "busy") return;
     if (state === "starting") { cancelCurrent(); return; }
     if (state === "idle") {
-      const missing = !lang && needModel(); // false when the model is there: no await, the tap starts at once
-      if (missing && await missing) return;
+      // false when the model is there: no await, the tap records at once. Otherwise the packs are still being
+      // checked (hosted start) or there is no model: the button shows busy meanwhile and the next tap records
+      // (a microphone opened after a wait is outside the tap, and Safari keeps it silent).
+      const missing = !lang && needModel();
+      if (missing) {
+        const id = ++operation;
+        state = "starting";
+        paint();
+        await missing;
+        if (id === operation) { state = "idle"; paint(); }
+        return;
+      }
       cancelCurrent();
       stopSpeaking();
       const id = ++operation;
@@ -124,7 +134,7 @@ export const handsFree = {
   async start({ onText, onState, onLevel, endMs }) {
     if (!micSupported()) { toast(t("mic.err.unsupported")); return false; }
     const missing = needModel();
-    if (missing && await missing) return false;
+    if (missing) { await missing; return false; } // as with micButton: after a wait, the learner starts again
     this.stop();
     cancelCurrent();
     const run = ++handsFreeRun;

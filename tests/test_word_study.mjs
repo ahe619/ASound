@@ -244,6 +244,8 @@ test("say-it accepts the word inside a sentence and simple inflections, but not 
   assert.equal(sayCorrect("map", "mop"), false);
   assert.equal(sayCorrect("stopped", "stop"), true);
   assert.equal(sayCorrect("boxes", "box"), true);
+  assert.equal(sayCorrect("photos", "photo"), true);
+  assert.equal(sayCorrect("potatoes", "potato"), true);
   assert.equal(sayCorrect("dying", "die"), true);
   assert.equal(sayCorrect("agreeing", "agree"), true);
   assert.equal(sayCorrect("scared", "scar"), false);

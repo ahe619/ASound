@@ -213,6 +213,7 @@ export function cleanupWordStudy() {
   host?.classList.remove("word-study");
   host = null;
   stopSpeaking();
+  stopCompare();
 }
 
 export function isWordStudyActive() {
@@ -557,6 +558,7 @@ function sayAgain(word) {
     onText: (heard) => fill(result, icon(sayCorrect(heard, word.term) ? "check" : "close"), " ", t("wstudy.sayHeard"), " ",
       h("span", { lang: "en" }, heard)),
   });
+  mic.addEventListener("click", stopCompare, true); // the model's voice must not play into the new take
   return h("div", { class: "attempt-row" }, mic, h("span", { class: "hint-line" }, t("wstudy.sayAgain")), result);
 }
 

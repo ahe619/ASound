@@ -312,12 +312,13 @@
       // Tap-to-talk records the pauses before and after speaking; the small recognizer often returns nothing for
       // a short phrase surrounded by silence, so it first hears only the speech, then the whole clip if that is empty.
       const speech = trimSilence(audio);
+      const kept = speech === audio ? copy : speech.slice(); // what is played back ("compare"): the speech only
       try {
-        let text = await transcribe(speech === audio ? audio : speech);
+        let text = await transcribe(speech);
         requireCapture(id);
         if (!text && speech !== audio) text = await transcribe(copy.slice());
         requireCapture(id);
-        return { text, audio: copy };
+        return { text, audio: kept };
       } catch (err) {
         if (id !== capture) throw aborted();
         throw err;

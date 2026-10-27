@@ -42,7 +42,8 @@ function inflections(base) {
     const y = base.slice(0, -1);
     return [y + "ies", y + "ied", base + "ing"];
   }
-  forms.push(/(s|x|z|ch|sh|o)$/.test(base) ? base + "es" : base + "s");
+  forms.push(/(s|x|z|ch|sh)$/.test(base) ? base + "es" : base + "s");
+  if (base.endsWith("o")) forms.push(base + "es"); // photos, potatoes
   if (base.endsWith("ie")) return forms.concat(base + "d", base.slice(0, -2) + "ying");
   if (base.endsWith("e")) return forms.concat(base + "d", /(ee|ye|oe)$/.test(base) ? base + "ing" : base.slice(0, -1) + "ing");
   // One-syllable consonant-vowel-consonant words double the last letter (stop: stopped, stopping).
