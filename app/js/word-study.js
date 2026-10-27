@@ -453,12 +453,16 @@ function spellingQuestion(session, index, word) {
     "aria-describedby": "ws-spelling-target ws-spelling-hint", placeholder: t("wstudy.spellingPlaceholder") });
   input.value = session.draft || "";
   const submit = h("button", { type: "submit", class: "btn primary big", disabled: !input.value.trim() }, t("wstudy.submitAnswer"));
+  // Save the draft a moment after typing stops (every keystroke used to rewrite the whole study state).
+  let saveTimer = 0;
   input.addEventListener("input", action(() => {
     session.draft = input.value;
     alternative.hidden = true;
     submit.disabled = !input.value.trim();
-    persist();
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(persist, 400);
   }));
+  input.addEventListener("blur", () => { clearTimeout(saveTimer); persist(); });
   input.addEventListener("focus", () => keepVisible(input));
   input.addEventListener("compositionstart", () => { composing = true; });
   input.addEventListener("compositionend", () => { composing = false; });

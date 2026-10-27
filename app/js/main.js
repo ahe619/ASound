@@ -52,7 +52,8 @@ async function boot() {
   initAccent();
   initSettings({ languageChanged: renderAll });
   onStoreChange((what) => {
-    if (what === "vocab") { paintVocabCount(); repaintSaveButtons(); if (state.tab === "vocab") renderVocab(); }
+    // Practice screens (word study, spoken review) repaint themselves; re-rendering the tab would remount them.
+    if (what === "vocab") { paintVocabCount(); repaintSaveButtons(); if (state.tab === "vocab" && !isVocabPracticing()) renderVocab(); }
     if (what === "sessions" && state.tab === "talk" && state.talkView === "home") renderTalkHome();
     if ((what === "profile" || what === "placements") && state.tab === "me") renderMe();
   });

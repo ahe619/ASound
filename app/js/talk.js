@@ -722,13 +722,20 @@ async function requestReply() {
   s._ctl = ctl;
   const input = [{ role: "user", content: P.partnerPrompt(s) }, ...s.turns.slice(-MAX_TURNS).filter((x) => x.text).map((x) => ({ role: x.role, content: x.text }))];
   try {
+    let latest = "", frame = 0;
     const text = await ask(input, {
       signal: ctl.signal,
+      // Tokens stream faster than the screen refreshes: draw the latest text once per frame.
       onText: ({ text }) => {
-        bubble.classList.remove("thinking");
-        bubble.setAttribute("lang", "en");
-        bubble.textContent = text;
-        scrollThread();
+        latest = text;
+        if (frame) return;
+        frame = (window.requestAnimationFrame || ((fn) => setTimeout(fn, 16)))(() => {
+          frame = 0;
+          bubble.classList.remove("thinking");
+          bubble.setAttribute("lang", "en");
+          bubble.textContent = latest;
+          scrollThread();
+        });
       },
     });
     if (state.session !== s) return;

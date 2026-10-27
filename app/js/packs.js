@@ -164,6 +164,13 @@ export async function checkConnections() {
   return probing;
 }
 
+// The configured or last-known source, without probing.
+function preferredSource() {
+  if (prefs.source !== "auto" && sourceList().includes(prefs.source)) return prefs.source;
+  if (sourceList().includes(catalog.defaultSource)) return catalog.defaultSource;
+  return sourceList()[0];
+}
+
 async function pickSource() {
   if (prefs.source !== "auto" && sourceList().includes(prefs.source)) return prefs.source;
   if (sourceList().includes(catalog.defaultSource)) return catalog.defaultSource;
@@ -211,7 +218,10 @@ export async function engineConfig(id, sourceName = null) {
     return { mode, base: voiceRoot(), cache: CACHE, canon: voiceCanon(), asr: undefined, llm: null };
   }
   // WebLLM caches by address, so a language model keeps the source it was downloaded from.
-  const source = sourceName || (p.kind === "llm" && llmSource(id)) || (await pickSource());
+  // An installed speech pack loads from the source-independent cache keys, so no network probe is needed at
+  // start-up (the probe fetches from every source and can take seconds on a slow phone connection).
+  const source = sourceName || (p.kind === "llm" && llmSource(id))
+    || (p.kind !== "llm" && installed(id) ? (resolved || preferredSource()) : await pickSource());
   const src = catalog.sources[source];
   return {
     mode, base: `${src.models}/`, cache: CACHE, canon: CANON,

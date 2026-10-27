@@ -18,21 +18,32 @@ export const onStoreChange = (fn) => { listeners.add(fn); return () => listeners
 const changed = (what) => listeners.forEach((fn) => { try { fn(what); } catch (e) { console.warn(e); } });
 
 /* vocabulary */
+// Saved words are read on every save-button paint: keep one parsed copy, refreshed on writes here and on
+// changes from another tab (the storage event).
+let vocabCache = null;
+if (typeof window !== "undefined") window.addEventListener?.("storage", (e) => { if (!e.key || e.key === K.vocab) vocabCache = null; });
+function writeVocab(list) { vocabCache = null; writeJSON(K.vocab, list); }
 export const vocab = {
-  all: () => arr(readJSON(K.vocab, [])).filter(isObj),
-  has: (term) => vocab.all().some((v) => v.id === slug(term)),
+  all: () => {
+    if (!vocabCache) {
+      const list = arr(readJSON(K.vocab, [])).filter(isObj);
+      vocabCache = { list, ids: new Set(list.map((v) => v.id)) };
+    }
+    return vocabCache.list.slice();
+  },
+  has: (term) => { vocab.all(); return vocabCache.ids.has(slug(term)); },
   add(item) {
     const id = slug(item.term);
     const doc = { id, term: str(item.term), ipa: str(item.ipa), meaning: str(item.meaning), example: str(item.example), source: str(item.source), createdAt: Date.now() };
-    writeJSON(K.vocab, [doc, ...vocab.all().filter((v) => v.id !== id)]);
+    writeVocab([doc, ...vocab.all().filter((v) => v.id !== id)]);
     changed("vocab");
   },
   remove(id) {
-    writeJSON(K.vocab, vocab.all().filter((v) => v.id !== id));
+    writeVocab(vocab.all().filter((v) => v.id !== id));
     changed("vocab");
   },
   update(id, patch) {
-    writeJSON(K.vocab, vocab.all().map((v) => (v.id === id ? { ...v, ...patch } : v)));
+    writeVocab(vocab.all().map((v) => (v.id === id ? { ...v, ...patch } : v)));
     changed("vocab");
   },
   // The learner used a saved expression in a real conversation; it counts once per session.

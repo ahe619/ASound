@@ -213,6 +213,23 @@
     frames.forEach((f, i) => out.set(f, i * FRAME));
     return out;
   };
+  // Keep the part with speech, plus 250 ms each side. "Speech" = at least 60 ms (three 20 ms windows) louder than
+  // four times the background level (the quietest fifth of the recording), so one click cannot decide the cut.
+  function trimSilence(audio) {
+    const win = Math.round(0.02 * RATE), pad = Math.round(0.25 * RATE), run = 3;
+    const levels = [];
+    for (let i = 0; i + win <= audio.length; i += win) levels.push(rmsOf(audio.subarray(i, i + win)));
+    if (levels.length < 10) return audio;
+    const floor = [...levels].sort((a, b) => a - b)[Math.floor(levels.length * 0.2)];
+    const limit = Math.max(0.008, floor * 4);
+    const sustained = (i) => levels[i] > limit && levels[i + 1] > limit && levels[i + 2] > limit;
+    let first = -1, last = -1;
+    for (let i = 0; i + run <= levels.length; i++) if (sustained(i)) { first = i; break; }
+    for (let i = levels.length - run; i >= 0; i--) if (sustained(i)) { last = i + run - 1; break; }
+    if (first < 0) return audio; // nothing clearly spoken: let the recognizer decide
+    const start = Math.max(0, first * win - pad), end = Math.min(audio.length, (last + 1) * win + pad);
+    return end - start >= 0.5 * RATE ? audio.slice(start, end) : audio;
+  }
 
   function onFrame(f) {
     const rms = rmsOf(f);
@@ -281,12 +298,20 @@
     async stop({ raw = false } = {}) {
       if (mic.state !== "recording") return { text: "", audio: null };
       const id = capture;
-      const audio = joinFrames(mic.frames);
+      let audio = joinFrames(mic.frames);
       mic.frames = [];
       mic.state = "paused";
       emit();
       requireCapture(id);
-      if (audio.length < 0.3 * RATE || raw) return { text: "", audio };
+      // Tap-to-talk is done: stop the audio graph until the next recording (startCapture resumes it), so the
+      // worklet does not keep posting frames to the page while nobody is recording.
+      try { mic.ctx && mic.ctx.state === "running" && mic.ctx.suspend().catch(() => {}); } catch {}
+      if (audio.length < 0.3 * RATE) return { text: "", audio };
+      // Tap-to-talk records the pauses before and after speaking; the small recognizer often returns nothing
+      // for a short phrase surrounded by silence, so recognize only the speech (plus a quarter second each side).
+      const speech = trimSilence(audio);
+      if (raw) return { text: "", audio: speech };
+      audio = speech;
       const copy = audio.slice();
       try {
         const text = await transcribe(audio);
