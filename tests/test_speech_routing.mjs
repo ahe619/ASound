@@ -8,7 +8,7 @@ const source = readFileSync(new URL("../app/js/speech.js", import.meta.url), "ut
   .replace(/^import .*;\r?\n/gm, "")
   .replace(/^export /gm, "")
   .replace('import("../kokoro/neural-tts.js")', "loadBrowserModule()")
-  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp };";
+  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp, prefetchSpeech };";
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 const en = { name: "English", lang: "en-US" };
 
@@ -101,6 +101,22 @@ test("explicit natural voices (standard preference) still use the installed brow
   assert.equal(f.voiceCapabilities().canNatural, false);
   assert.ok(f.requests.every(r => r.path === "api/health"));
   assert.equal(f.prefs.voiceEngine, "standard");
+});
+
+test("a repeated or prefetched line is generated once; another voice model starts afresh", async () => {
+  const f = fixture({ preference: "standard" });
+  f.configureVoice({ mode: "web", base: "/voices/" });
+  f.speak("Hello."); await flush();
+  f.speak("Hello."); await flush();
+  assert.equal(f.syntheses(), 1);
+  f.prefetchSpeech("Goodbye."); await flush();
+  assert.equal(f.syntheses(), 2);
+  f.speak("Goodbye."); await flush();
+  assert.equal(f.syntheses(), 2);
+  assert.equal(f.speechStatus().engine, "browser");
+  f.configureVoice({ mode: "web", base: "/other-voices/" });
+  f.speak("Hello."); await flush();
+  assert.equal(f.syntheses(), 3);
 });
 
 test("mobile automatic speech starts without waiting for the local-service health check", async () => {
