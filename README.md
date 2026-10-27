@@ -48,7 +48,8 @@ an NVIDIA graphics card. Mobile performance still needs validation on real devic
 - **Vocab** - everything you saved, with audio, plus spoken review (see the meaning, say the English, spaced repetition).
   Word study over the everyday, CET-4, CET-6 and postgraduate lists: flashcards, multiple choice (with look-alike
   traps such as affect / effect, advice / advise), spelling and **Say it** (see the picture and the meaning, say the
-  word in a short sentence, then compare model / you / model).
+  word in a short sentence, then compare model / you / model). On a computer: 1-4 (or A-D) answer or rate,
+  Space shows the answer, Enter goes on.
   611 everyday words have a picture (drawn locally with Z-Image-Turbo, Apache-2.0, checked to contain no text), and
   cards show the **American** pronunciation first (General American IPA from ASound's lexicon, the dictionary's
   British one beside it).

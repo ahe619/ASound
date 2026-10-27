@@ -59,6 +59,18 @@ function flushDraft() {
 }
 window.addEventListener("pagehide", () => { generation++; stopSpeaking(); stopCompare(); flushDraft(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushDraft(); }); // a phone switching apps
+
+// Keyboard on a computer: 1-4 (or A-D) pick an option or a rating, Space shows the answer, Enter goes on.
+document.addEventListener("keydown", event => {
+  if (!host?.isConnected || !host.getClientRects().length || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("input, textarea, select, [contenteditable]")) return;
+  const press = button => { if (button && !button.disabled) { event.preventDefault(); button.click(); } };
+  const key = event.key.toLowerCase();
+  const n = /^[1-9]$/.test(key) ? Number(key) - 1 : /^[a-d]$/.test(key) ? key.charCodeAt(0) - 97 : -1;
+  if (n >= 0) press(host.querySelectorAll(".ws-options button, .ws-grades button")[n]);
+  else if ((key === " " || key === "enter") && !target?.closest("button, a")) press(host.querySelector("#ws-next, .ws-reveal button"));
+});
 window.visualViewport?.addEventListener("resize", () => {
   if (host?.isConnected && host.contains(document.activeElement) && document.activeElement?.id === "ws-spelling") {
     keepVisible(document.activeElement);
