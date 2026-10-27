@@ -1,7 +1,7 @@
 // Local word study: optional interests/situations, sourced exam decks, and saved recall progress.
 import { h, fill, icon, fmtIpa, str } from "./util.js";
 import { t, addStrings, getLanguage } from "./i18n.js";
-import { speakBtn, stopSpeaking, speak, audioContext } from "./speech.js";
+import { speakBtn, stopSpeaking, speak, audioContext, prefetchSpeech } from "./speech.js";
 import { micButton } from "./mic.js";
 import { vocab } from "./store.js";
 import { createWordIllustration, warmPictures, preparePictures, hasPicture } from "./word-illustrations.js";
@@ -375,6 +375,9 @@ function cardView() {
   const word = wordsById.get(session.ids[index]);
   // Fetch this and the next two cards' pictures now, so a revealed card shows its picture without a wait.
   warmPictures(session.ids.slice(index, index + 3).map(id => wordsById.get(id)).filter(Boolean));
+  // ...and this word's and the next word's audio, once the card is drawn, so "Listen" plays without a wait.
+  const soon = window.requestIdleCallback || (fn => setTimeout(fn, 300));
+  soon(() => session.ids.slice(index, index + 2).forEach(id => wordsById.has(id) && prefetchSpeech(wordsById.get(id).term)), { timeout: 1500 });
   const collected = vocab.has(word.term);
   const fallback = session.options.practice === "choice" && session.choices.length < 2;
   const practice = fallback ? "cards" : session.options.practice;

@@ -58,6 +58,17 @@ function cachedAudio(key) {
   if (buf) { nativeCache.delete(key); nativeCache.set(key, buf); }
   return buf;
 }
+// The cached audio for `key`, or the generation already under way for it (a prefetch and a tap on "Listen" for the
+// same word share one), or a new one from make().
+const inflight = new Map();
+function shared(key, make) {
+  const hit = cachedAudio(key);
+  if (hit) return Promise.resolve(hit);
+  if (!inflight.has(key)) {
+    inflight.set(key, Promise.resolve().then(make).then((buf) => keepAudio(key, buf)).finally(() => inflight.delete(key)));
+  }
+  return inflight.get(key);
+}
 function keepAudio(key, buf) {
   nativeCache.set(key, buf);
   let total = 0;
@@ -225,6 +236,18 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
   route(clean, mine, rate, voice, done);
 }
 
+// Make the audio for a word or a short line ahead of time (the card on screen, the next card) so playing it starts
+// at once. Uses the engine speak() would use first; system speech needs nothing. Failures are left to speak().
+export function prefetchSpeech(text, rateMul = 1) {
+  const clean = str(text);
+  if (!clean || clean.length > 200 || status.native === null) return; // health check pending: engine unknown
+  const order = speechEngineOrder({ ...voiceCapabilities(), preference: prefs.voiceEngine, natural: status.natural });
+  const chunk = { natural: naturalChunk, native: nativeChunk, browser: browserChunk }[order[0]];
+  if (!chunk) return;
+  const rate = clamp(prefs.rate * rateMul, 0.5, 1.6);
+  for (const part of chunk === nativeChunk ? [clean] : sentences(clean)) chunk(part, rate, prefs.voice).catch(() => {});
+}
+
 async function route(text, mine, rate, voice, done) {
   // System speech can start immediately even if a static host's health check is pending.
   loadSystemVoices();
@@ -258,30 +281,28 @@ async function route(text, mine, rate, voice, done) {
   done();
 }
 
-async function nativeChunk(text, rate, voice) {
-  const key = `${voice}|${rate}|${text}`;
-  const hit = cachedAudio(key);
-  if (hit) return hit;
-  const res = await fetch("api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice, speed: rate }),
+function nativeChunk(text, rate, voice) {
+  return shared(`${voice}|${rate}|${text}`, async () => {
+    const res = await fetch("api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice, speed: rate }),
+    });
+    if (!res.ok) throw new Error(`native speech ${res.status}`);
+    return ctx().decodeAudioData(await res.arrayBuffer());
   });
-  if (!res.ok) throw new Error(`native speech ${res.status}`);
-  return keepAudio(key, await ctx().decodeAudioData(await res.arrayBuffer()));
 }
 
-async function naturalChunk(text, rate, voice) {
-  const key = `natural|${voice}|${text}`;
-  const hit = cachedAudio(key);
-  if (hit) return hit;
-  const res = await fetch("api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice, speed: rate, engine: "natural" }),
+function naturalChunk(text, rate, voice) {
+  return shared(`natural|${voice}|${text}`, async () => {
+    const res = await fetch("api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice, speed: rate, engine: "natural" }),
+    });
+    if (!res.ok) { readHealth(); throw new Error(`natural speech ${res.status}`); }
+    return ctx().decodeAudioData(await res.arrayBuffer());
   });
-  if (!res.ok) { readHealth(); throw new Error(`natural speech ${res.status}`); }
-  return keepAudio(key, await ctx().decodeAudioData(await res.arrayBuffer()));
 }
 
 // Where the in-page voice finds its files (js/packs.js engineConfig): this computer, or the download cache.
@@ -299,9 +320,6 @@ export function configureVoice(cfg) {
 
 async function browserChunk(text, rate, voice, mine) {
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
-  const key = `browser|${voice}|${rate}|${text}`;
-  const hit = cachedAudio(key);
-  if (hit) return hit;
   if (!browserModulePromise) {
     browserModulePromise = import("../kokoro/neural-tts.js").then(mod => {
       browserMod = mod;
@@ -313,12 +331,14 @@ async function browserChunk(text, rate, voice, mine) {
   await browserModulePromise;
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
-  const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+  const buf = await shared(`browser|${voice}|${rate}|${text}`, async () => {
+    const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+    const out = ctx().createBuffer(1, pcm.length, sr);
+    out.copyToChannel(pcm, 0);
+    return out;
+  });
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
-  const a = ctx();
-  const buf = a.createBuffer(1, pcm.length, sr);
-  buf.copyToChannel(pcm, 0);
-  return keepAudio(key, buf);
+  return buf;
 }
 
 // The native engine is fast, so it gets the whole text at once: the intonation then flows across sentences.
