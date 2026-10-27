@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "batch": "initial-three-words",
+  "batch": "initial-three-words + everyday-deck-z1",
   "createdDate": "2026-10-26",
   "dictionary": "words.json",
   "notes": {
-    "en": "Three optional visual memory aids for selected senses; this is not coverage of the complete word list. Images do not change dictionary definitions, exam membership or random selection.",
-    "zh": "首批仅为三个词的选定义项提供可选记忆配图，不代表完整词库覆盖。配图不改变词典释义、考试归属或随机抽词。"
+    "en": "Optional visual memory aids for picturable everyday words. Three were drawn and checked by hand; the rest were drawn locally with Z-Image-Turbo (Tongyi-MAI, Apache-2.0) from a written scene per word, checked for text by OCR. Images do not change definitions, exam membership or random selection.",
+    "zh": "日常词汇中可配图词的可选记忆配图。其中三张为人工生成并检查；其余由 Z-Image-Turbo（通义 Tongyi-MAI，Apache-2.0）在本地按每个词的场景描述生成，并经 OCR 检查不含文字。配图不改变释义、考试归属或随机抽词。"
   },
   "illustrations": [
     {

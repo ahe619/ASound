@@ -3,7 +3,7 @@ import { h, fill, icon, fmtIpa, str } from "./util.js";
 import { t, addStrings, getLanguage } from "./i18n.js";
 import { speakBtn, stopSpeaking } from "./speech.js";
 import { vocab } from "./store.js";
-import { createWordIllustration } from "./word-illustrations.js";
+import { createWordIllustration, warmPictures, preparePictures } from "./word-illustrations.js";
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
@@ -73,10 +73,25 @@ function loadStyle() {
   return stylePromise;
 }
 
+// General American transcriptions (vocabulary/ipa-us.json, from tools/american_ipa.py). The dictionary's own
+// transcriptions are mostly British; ASound teaches an American accent, so the American one is shown first.
+let usIpa = null;
+let usIpaPromise = null;
+function loadUsIpa() {
+  if (!usIpaPromise) {
+    usIpaPromise = fetch(new URL("../vocabulary/ipa-us.json", import.meta.url))
+      .then(res => (res.ok ? res.json() : null))
+      .then(doc => { usIpa = doc && doc.schemaVersion === 1 && doc.ipa ? doc.ipa : {}; })
+      .catch(() => { usIpa = {}; });
+  }
+  return usIpaPromise;
+}
+
 function loadAssets() {
   if (!assetsPromise) {
     assetsPromise = Promise.all([
       loadStyle(),
+      loadUsIpa(), // never rejects: a missing file only hides the American line
       fetch(new URL("../locales/feat/word-study.json", import.meta.url)).then(async res => {
         if (!res.ok) throw new Error("word-study strings unavailable");
         const strings = await res.json();
@@ -136,6 +151,7 @@ function prepareQuestion() {
 }
 
 export async function renderWordStudy(root) {
+  preparePictures();
   if (host && host !== root) stopSpeaking();
   host = root;
   const mine = ++generation;
@@ -341,13 +357,19 @@ function cardView() {
   const session = saved.session;
   const index = session.index;
   const word = wordsById.get(session.ids[index]);
+  // Fetch this and the next two cards' pictures now, so a revealed card shows its picture without a wait.
+  warmPictures(session.ids.slice(index, index + 3).map(id => wordsById.get(id)).filter(Boolean));
   const collected = vocab.has(word.term);
   const fallback = session.options.practice === "choice" && session.choices.length < 2;
   const practice = fallback ? "cards" : session.options.practice;
   const answered = !!session.attempt;
   const hideWord = practice === "spelling" && !answered;
   const revealed = practice === "cards" ? session.revealed : answered;
-  const pronunciation = word.ipa ? h("p", { class: "ipa" }, fmtIpa(word.ipa)) : null;
+  const us = usIpa && typeof usIpa[word.id] === "string" ? usIpa[word.id] : "";
+  const pronunciation = us
+    ? h("p", { class: "ipa ws-ipa" }, h("span", { class: "ws-ipa-tag" }, t("wstudy.ipaUs")), fmtIpa(us),
+      word.ipa ? h("span", { class: "ws-ipa-uk" }, t("wstudy.ipaUk"), " ", fmtIpa(word.ipa)) : null)
+    : word.ipa ? h("p", { class: "ipa" }, fmtIpa(word.ipa)) : null;
   const reveal = () => {
     if (!host?.isConnected || saved.session !== session || session.index !== index) return;
     session.revealed = true;

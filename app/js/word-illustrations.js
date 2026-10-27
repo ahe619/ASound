@@ -1,27 +1,31 @@
 // Optional editorial illustrations, separate from dictionary text and exam labels.
-// Call only after an answer is revealed/submitted. A missing image never blocks study.
+// Reads the small run-time index vocabulary/pictures.json (the full provenance stays in illustrations.json).
+// A missing index, image or stylesheet never blocks study.
 import { getLanguage } from "./i18n.js";
 
-const manifestURL = new URL("../vocabulary/illustrations.json", import.meta.url);
-let manifestPromise = null;
-let illustrations = null;
+const indexURL = new URL("../vocabulary/pictures.json", import.meta.url);
+let indexPromise = null;
+let pictures = null; // Map wordId -> {src, width, height, term, sense: {zh, en}, alt: {zh, en}}
 let stylePromise = null;
+const warmed = new Set();
 
-function loadManifest() {
-  if (!manifestPromise) {
-    manifestPromise = fetch(manifestURL).then(async response => {
-      if (!response.ok) throw new Error("illustrations unavailable");
+function loadIndex() {
+  if (!indexPromise) {
+    indexPromise = fetch(indexURL).then(async (response) => {
+      if (!response.ok) throw new Error("pictures unavailable");
       const data = await response.json();
-      if (data.schemaVersion !== 1 || !Array.isArray(data.illustrations)) throw new Error("invalid illustration manifest");
-      illustrations = new Map(data.illustrations.filter(item => item && typeof item.wordId === "string"
-        && typeof item.term === "string" && /^img\/vocabulary\/[a-z0-9-]+\.(?:webp|png)$/.test(item.src)
-        && item.alt?.en && item.alt?.zh && item.sense?.en && item.sense?.zh
-        && Number.isInteger(item.width) && item.width > 0 && Number.isInteger(item.height) && item.height > 0)
-        .map(item => [item.wordId, item]));
-      return illustrations;
-    }).catch(() => { manifestPromise = null; return null; });
+      if (data.schemaVersion !== 1 || !data.pictures || typeof data.pictures !== "object") throw new Error("invalid picture index");
+      pictures = new Map();
+      for (const [id, row] of Object.entries(data.pictures)) {
+        const [src, width, height, term, senseZh, senseEn, altZh, altEn] = Array.isArray(row) ? row : [];
+        if (typeof src !== "string" || !/^img\/vocabulary\/[a-z0-9-]+\.(?:webp|png)$/.test(src)
+          || !(width > 0) || !(height > 0) || typeof term !== "string" || !senseZh || !senseEn || !altZh || !altEn) continue;
+        pictures.set(id, { src, width, height, term, sense: { zh: senseZh, en: senseEn }, alt: { zh: altZh, en: altEn } });
+      }
+      return pictures;
+    }).catch(() => { indexPromise = null; return null; });
   }
-  return manifestPromise;
+  return indexPromise;
 }
 
 function loadStyle() {
@@ -38,13 +42,44 @@ function loadStyle() {
   return stylePromise;
 }
 
+const imageURL = (entry) => new URL(`../${entry.src}`, import.meta.url).href;
+
+// The picture for a word, or null (resolves after the index loads).
+export async function pictureFor(word) {
+  if (!word || typeof word.id !== "string") return null;
+  const entries = await loadIndex();
+  const entry = entries?.get(word.id);
+  return entry && entry.term === word.term ? { ...entry, url: imageURL(entry) } : null;
+}
+
+// Whether a word has a picture, without waiting (false until the index has loaded).
+export const hasPicture = (word) => !!(pictures && word && pictures.get(word.id)?.term === word.term);
+
+// Start loading the index (cheap) so later checks are instant.
+export const preparePictures = () => { loadIndex(); };
+
+// Fetch the next cards' pictures in the background so they appear without a wait.
+export async function warmPictures(words) {
+  const entries = await loadIndex();
+  if (!entries) return;
+  for (const word of words || []) {
+    const entry = entries.get(word?.id);
+    if (!entry || entry.term !== word.term || warmed.has(entry.src)) continue;
+    warmed.add(entry.src);
+    const image = new Image();
+    image.decoding = "async";
+    image.src = imageURL(entry);
+  }
+}
+
+// A captioned figure for a revealed card; removes itself when the word has no picture.
 export function createWordIllustration(word) {
   if (!word || typeof word.id !== "string" || typeof word.term !== "string") return null;
-  if (illustrations && !illustrations.has(word.id)) return null;
+  if (pictures && !pictures.has(word.id)) return null;
   const figure = document.createElement("figure");
   figure.className = "ws-illustration";
   figure.hidden = true;
-  loadManifest().then(async entries => {
+  loadIndex().then(async (entries) => {
     const entry = entries?.get(word.id);
     if (!figure.isConnected || !entry || entry.term !== word.term) { figure.remove(); return; }
     const lang = getLanguage().startsWith("zh") ? "zh" : "en";
@@ -66,7 +101,7 @@ export function createWordIllustration(word) {
     label.textContent = lang === "zh" ? "AI 配图" : "AI illustration";
     caption.append(label);
     figure.append(image, caption);
-    image.src = new URL(`../${entry.src}`, import.meta.url).href;
+    image.src = imageURL(entry);
     try {
       await Promise.all([loaded, loadStyle()]);
       if (figure.isConnected && image.naturalWidth > 0) figure.hidden = false;
