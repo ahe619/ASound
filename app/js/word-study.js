@@ -46,10 +46,19 @@ function openPractice() {
 
 function backToSetup() {
   stopSpeaking();
+  stopCompare();
   goBack({ tab: "vocab", detail: "setup" });
 }
 
-window.addEventListener("pagehide", () => { generation++; stopSpeaking(); });
+let draftTimer = 0;
+function flushDraft() {
+  if (!draftTimer) return;
+  clearTimeout(draftTimer);
+  draftTimer = 0;
+  persist();
+}
+window.addEventListener("pagehide", () => { generation++; stopSpeaking(); stopCompare(); flushDraft(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushDraft(); }); // a phone switching apps
 window.visualViewport?.addEventListener("resize", () => {
   if (host?.isConnected && host.contains(document.activeElement) && document.activeElement?.id === "ws-spelling") {
     keepVisible(document.activeElement);
@@ -57,8 +66,8 @@ window.visualViewport?.addEventListener("resize", () => {
 });
 
 // These also cover an unavailable feature dictionary on the first visit.
-addStrings("en", { "wstudy.loading": "Loading vocabulary…", "wstudy.loadFailed": "The word list could not be loaded. Check your connection and try again.", "wstudy.retry": "Try again" });
-addStrings("zh", { "wstudy.loading": "正在加载词库…", "wstudy.loadFailed": "词库暂时无法加载，请检查网络后重试。", "wstudy.retry": "重试" });
+addStrings("en", { "wstudy.loading": "Loading vocabulary\u2026", "wstudy.loadFailed": "The word list could not be loaded. Check your connection and try again.", "wstudy.retry": "Try again" });
+addStrings("zh", { "wstudy.loading": "\u6b63\u5728\u52a0\u8f7d\u8bcd\u5e93\u2026", "wstudy.loadFailed": "\u8bcd\u5e93\u6682\u65f6\u65e0\u6cd5\u52a0\u8f7d\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5\u3002", "wstudy.retry": "\u91cd\u8bd5" });
 
 function loadStyle() {
   if (!stylePromise) {
@@ -344,7 +353,7 @@ function begin(mode) {
 function sessionLabel(session) {
   return [t(`wstudy.deck.${session.options.deck}`), session.options.topic ? t(`wstudy.topic.${session.options.topic}`) : "",
     session.options.scenario ? t(`wstudy.scenario.${session.options.scenario}`) : "",
-    t(`wstudy.practice.${session.options.practice}`)].filter(Boolean).join(" · ");
+    t(`wstudy.practice.${session.options.practice}`)].filter(Boolean).join(" \u00b7 ");
 }
 
 function pronunciationButton(word) {
@@ -403,7 +412,7 @@ function cardView() {
       revealed ? h("div", { class: "ws-answer" },
         h("p", { id: "ws-meaning", tabindex: "-1", class: "ws-meaning", lang: "zh-CN" }, word.meaning),
         word.example ? h("p", { class: "ex", lang: "en" }, word.example) : null,
-        practice === "say" ? null : createWordIllustration(word),
+        createWordIllustration(word), // after "Say it" too: the picture with the word is what is remembered
         practice === "cards" ? h("p", { class: "hint-line" }, t("wstudy.rateHint")) : null) : practice === "cards"
         ? h("div", { class: "ws-reveal" }, h("p", { class: "hint-line" }, t("wstudy.recallHint")),
           h("button", { type: "button", class: "btn primary big", onclick: action(reveal) }, t("wstudy.reveal"))) : null),
@@ -454,15 +463,14 @@ function spellingQuestion(session, index, word) {
   input.value = session.draft || "";
   const submit = h("button", { type: "submit", class: "btn primary big", disabled: !input.value.trim() }, t("wstudy.submitAnswer"));
   // Save the draft a moment after typing stops (every keystroke used to rewrite the whole study state).
-  let saveTimer = 0;
   input.addEventListener("input", action(() => {
     session.draft = input.value;
     alternative.hidden = true;
     submit.disabled = !input.value.trim();
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(persist, 400);
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => { draftTimer = 0; persist(); }, 400);
   }));
-  input.addEventListener("blur", () => { clearTimeout(saveTimer); persist(); });
+  input.addEventListener("blur", flushDraft);
   input.addEventListener("focus", () => keepVisible(input));
   input.addEventListener("compositionstart", () => { composing = true; });
   input.addEventListener("compositionend", () => { composing = false; });
@@ -526,19 +534,28 @@ function sayQuestion(session, index, word) {
 }
 
 // Model, you, model: hear the American voice, your own take, then the model again.
+let compareRun = 0, takeSource = null;
+function stopCompare() {
+  compareRun++;
+  try { if (takeSource) takeSource.stop(); } catch {} // not started yet
+  takeSource = null;
+}
 function compareTake(word) {
   const take = lastTake;
   if (!take || take.wordId !== word.id) return;
+  stopCompare();
+  const run = compareRun, live = () => run === compareRun;
   speak(word.term, null, 0.9, () => {
     const ctx = audioContext();
-    if (!ctx) return;
+    if (!ctx || !live()) return;
     const buffer = ctx.createBuffer(1, take.audio.length, 16000);
     buffer.copyToChannel(take.audio, 0);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-    source.onended = () => setTimeout(() => speak(word.term, null, 0.9), 250);
-    setTimeout(() => source.start(), 250);
+    source.onended = () => setTimeout(() => { if (live()) { takeSource = null; speak(word.term, null, 0.9); } }, 250);
+    takeSource = source;
+    setTimeout(() => { if (live()) source.start(); }, 250);
   });
 }
 
@@ -562,6 +579,7 @@ function continueAnswer(session, index, word) {
 
 function advance(session) {
   stopSpeaking();
+  stopCompare();
   session.index++;
   session.revealed = false;
   session.attempt = null;
@@ -587,7 +605,7 @@ function finishedView() {
   const results = session.options.practice === "cards"
     ? RATINGS.map(rating => [session.ratings.filter(entry => entry.rating === rating).length, t(`wstudy.rating.${rating}`)])
     : [[correct, t("wstudy.resultCorrect")], [answers.length - correct, t("wstudy.resultWrong")],
-      [answers.length ? `${Math.round(correct / answers.length * 100)}%` : "—", t("wstudy.accuracy")]];
+      [answers.length ? `${Math.round(correct / answers.length * 100)}%` : "-", t("wstudy.accuracy")]];
   return [
     h("section", { class: "card ws-finished" },
       h("div", { class: "ws-finished-mark", "aria-hidden": "true" }, icon("check")),

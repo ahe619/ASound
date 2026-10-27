@@ -131,7 +131,7 @@ export function gradeProgress(previous, rating, now = Date.now()) {
   if (Number.isInteger(old.answers) && old.answers > 0) {
     next.answers = integer(old.answers, 1, 1000000);
     next.correctAnswers = integer(old.correctAnswers, 0, next.answers);
-    next.lastPractice = ["choice", "spelling"].includes(old.lastPractice) ? old.lastPractice : "choice";
+    next.lastPractice = ANSWERED.includes(old.lastPractice) ? old.lastPractice : "choice";
     next.lastAnswerCorrect = old.lastAnswerCorrect === true;
   }
   return next;
@@ -164,7 +164,7 @@ function cleanState(value) {
     if (Number.isInteger(entry.answers) && entry.answers > 0) {
       progress[id].answers = integer(entry.answers, 1, 1000000);
       progress[id].correctAnswers = integer(entry.correctAnswers, 0, progress[id].answers);
-      progress[id].lastPractice = ["choice", "spelling"].includes(entry.lastPractice) ? entry.lastPractice : "choice";
+      progress[id].lastPractice = ANSWERED.includes(entry.lastPractice) ? entry.lastPractice : "choice";
       progress[id].lastAnswerCorrect = entry.lastAnswerCorrect === true;
     }
   }

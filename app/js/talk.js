@@ -721,8 +721,8 @@ async function requestReply() {
   const ctl = new AbortController();
   s._ctl = ctl;
   const input = [{ role: "user", content: P.partnerPrompt(s) }, ...s.turns.slice(-MAX_TURNS).filter((x) => x.text).map((x) => ({ role: x.role, content: x.text }))];
+  let latest = "", frame = 0;
   try {
-    let latest = "", frame = 0;
     const text = await ask(input, {
       signal: ctl.signal,
       // Tokens stream faster than the screen refreshes: draw the latest text once per frame.
@@ -753,6 +753,8 @@ async function requestReply() {
     li.append(h("div", { class: "msg-tools" }, h("button", { type: "button", class: "mini", onclick: () => { li.remove(); requestReply(); } }, t("chat.retry"))));
     if (chatVisible()) { setLive("listening"); handsFree.resume(); }
   } finally {
+    // A frame still pending would paint streamed text over the error message.
+    if (frame) (window.cancelAnimationFrame || clearTimeout)(frame);
     if (s._ctl === ctl) s._ctl = null;
     if (state.session === s) setBusy(false);
   }
@@ -1009,7 +1011,10 @@ function normSummary(raw, doc = null) {
   const o = isObj(raw) ? raw : {};
   // Small models sometimes praise the learner for the partner's lines: drop strengths that quote one.
   const partner = doc ? arr(doc.turns).filter((x) => x.role === "assistant").map((x) => tokens(x.text).map(normTok).filter(Boolean).join(" ")) : [];
-  const quotesPartner = (s) => (String(s).match(/['"\u2018\u201c]([^'"\u2019\u201d]{12,})['"\u2019\u201d]/g) || [])
+  // Quoted text: "...", a curly pair, or '...' whose apostrophes (don't, I'd) stay inside the quote.
+  // (No lookbehind: this module loads at startup and older iPhone Safari cannot parse one.)
+  const QUOTED = /"([^"]{12,})"|\u201c([^\u201d]{12,})\u201d|(?:^|[^\p{L}])['\u2018]((?:[^'\u2019]|['\u2019](?=\p{L})){12,}?)['\u2019](?!\p{L})/gu;
+  const quotesPartner = (s) => (String(s).match(QUOTED) || [])
     .some((m) => { const key = tokens(m).map(normTok).filter(Boolean).join(" "); return key && partner.some((p) => p.includes(key)); });
   return {
     overall: str(o.overall),

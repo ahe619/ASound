@@ -297,7 +297,7 @@ function guessDrills(missed) {
   const found = [];
   const add = (id) => { if (!found.includes(id)) found.push(id); };
   for (const raw of missed) {
-    const w = String(raw).toLowerCase();
+    const w = String(raw).toLowerCase().replace(/[^a-z']/g, ""); // "feel," and "milk." end in l and k
     if (/th/.test(w)) add("th");
     if (/[aeiou][td]+(er|y|le|ing|ed|a|o)\b/.test(w)) add("flap");
     if (/[aeiou]r/.test(w)) add("r");
