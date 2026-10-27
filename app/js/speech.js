@@ -49,7 +49,26 @@ let active = [];          // playing AudioBufferSourceNodes
 let seq = 0;
 let speakingBtn = null;
 let unlocked = false;
+// Synthesized audio, least recently played first. "Listen" again (or the next card's word) plays at once instead
+// of being generated again; capped by total length (three minutes of speech, about 17 MB) for phones.
 const nativeCache = new Map();
+const CACHE_SECONDS = 180;
+function cachedAudio(key) {
+  const buf = nativeCache.get(key);
+  if (buf) { nativeCache.delete(key); nativeCache.set(key, buf); }
+  return buf;
+}
+function keepAudio(key, buf) {
+  nativeCache.set(key, buf);
+  let total = 0;
+  for (const b of nativeCache.values()) total += b.duration;
+  for (const [k, b] of nativeCache) {
+    if (total <= CACHE_SECONDS || k === key) break;
+    total -= b.duration;
+    nativeCache.delete(k);
+  }
+  return buf;
+}
 let browserMod = null;
 let browserModulePromise = null;
 let voiceConfig = null;
@@ -241,36 +260,36 @@ async function route(text, mine, rate, voice, done) {
 
 async function nativeChunk(text, rate, voice) {
   const key = `${voice}|${rate}|${text}`;
-  if (nativeCache.has(key)) return nativeCache.get(key);
+  const hit = cachedAudio(key);
+  if (hit) return hit;
   const res = await fetch("api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, voice, speed: rate }),
   });
   if (!res.ok) throw new Error(`native speech ${res.status}`);
-  const buf = await ctx().decodeAudioData(await res.arrayBuffer());
-  nativeCache.set(key, buf);
-  if (nativeCache.size > 200) nativeCache.delete(nativeCache.keys().next().value);
-  return buf;
+  return keepAudio(key, await ctx().decodeAudioData(await res.arrayBuffer()));
 }
 
 async function naturalChunk(text, rate, voice) {
   const key = `natural|${voice}|${text}`;
-  if (nativeCache.has(key)) return nativeCache.get(key);
+  const hit = cachedAudio(key);
+  if (hit) return hit;
   const res = await fetch("api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, voice, speed: rate, engine: "natural" }),
   });
   if (!res.ok) { readHealth(); throw new Error(`natural speech ${res.status}`); }
-  const buf = await ctx().decodeAudioData(await res.arrayBuffer());
-  nativeCache.set(key, buf);
-  return buf;
+  return keepAudio(key, await ctx().decodeAudioData(await res.arrayBuffer()));
 }
 
 // Where the in-page voice finds its files (js/packs.js engineConfig): this computer, or the download cache.
 export function configureVoice(cfg) {
-  if (JSON.stringify(cfg || null) !== JSON.stringify(voiceConfig)) stopSpeaking();
+  if (JSON.stringify(cfg || null) !== JSON.stringify(voiceConfig)) {
+    stopSpeaking();
+    for (const key of [...nativeCache.keys()]) if (key.startsWith("browser|")) nativeCache.delete(key); // another voice model
+  }
   voiceConfig = cfg || null;
   if (browserMod && browserMod.configure && cfg) browserMod.configure(cfg);
   if (!cfg && browserMod?.dispose) browserMod.dispose();
@@ -280,6 +299,9 @@ export function configureVoice(cfg) {
 
 async function browserChunk(text, rate, voice, mine) {
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
+  const key = `browser|${voice}|${rate}|${text}`;
+  const hit = cachedAudio(key);
+  if (hit) return hit;
   if (!browserModulePromise) {
     browserModulePromise = import("../kokoro/neural-tts.js").then(mod => {
       browserMod = mod;
@@ -296,7 +318,7 @@ async function browserChunk(text, rate, voice, mine) {
   const a = ctx();
   const buf = a.createBuffer(1, pcm.length, sr);
   buf.copyToChannel(pcm, 0);
-  return buf;
+  return keepAudio(key, buf);
 }
 
 // The native engine is fast, so it gets the whole text at once: the intonation then flows across sentences.
