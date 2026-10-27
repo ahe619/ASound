@@ -74,6 +74,13 @@
 .ws-results > div + div { border-left: 1px solid var(--line); }
 .ws-results strong { font-size: 28px; color: var(--blue); }
 .ws-results span { color: var(--muted); font-size: 13px; }
+.ws-missed { width: 100%; max-width: 460px; display: grid; gap: 8px; text-align: start; }
+.ws-missed h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--muted); }
+.ws-missed ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.ws-missed li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; }
+.ws-missed li b { font-size: 16px; flex: none; }
+.ws-missed li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.ws-missed li button { flex: none; }
 @media (max-width: 520px) {
   .ws-options { grid-template-columns: minmax(0, 1fr); }
   .ws-option { min-height: 58px; padding: 12px; }

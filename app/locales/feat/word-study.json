@@ -120,7 +120,9 @@
     "wstudy.sayHint": "Say it in a short sentence, like “It’s a ___.” or “I like to ___.” (single words are hard to hear). Tap again when done.",
     "wstudy.sayTypePlaceholder": "or type it",
     "wstudy.sayHeard": "Heard:",
-    "wstudy.compare": "Compare: model, you, model"
+    "wstudy.compare": "Compare: model, you, model",
+    "wstudy.missedTitle": "Words to look at again",
+    "wstudy.retryMissed": "Practice these {n} again"
   },
   "zh": {
     "wstudy.loading": "正在加载词库…",
@@ -243,6 +245,8 @@
     "wstudy.sayHint": "用一个短句说出来，比如“It’s a ___.”或“I like to ___.”（单个单词不好识别），说完再点一下。",
     "wstudy.sayTypePlaceholder": "也可以打字",
     "wstudy.sayHeard": "听到的是：",
-    "wstudy.compare": "对比：示范、你、示范"
+    "wstudy.compare": "对比：示范、你、示范",
+    "wstudy.missedTitle": "需要再看一遍的词",
+    "wstudy.retryMissed": "再练这 {n} 个词"
   }
 }

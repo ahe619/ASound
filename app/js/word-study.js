@@ -612,6 +612,15 @@ function grade(session, index, word, rating) {
   advance(session);
 }
 
+function retry(session, words) {
+  stopSpeaking();
+  saved.options = { ...session.options };
+  saved.session = { ids: words.map(word => word.id), index: 0, revealed: false, ratings: [], options: { ...session.options },
+    choices: [], draft: "", attempt: null, mode: session.mode };
+  persist();
+  openPractice();
+}
+
 function finishedView() {
   const session = saved.session;
   const answers = session.ratings.filter(entry => typeof entry.correct === "boolean");
@@ -621,6 +630,8 @@ function finishedView() {
     ? RATINGS.map(rating => [session.ratings.filter(entry => entry.rating === rating).length, t(`wstudy.rating.${rating}`)])
     : [[correct, t("wstudy.resultCorrect")], [answers.length - correct, t("wstudy.resultWrong")],
       [answers.length ? `${Math.round(correct / answers.length * 100)}%` : "-", t("wstudy.accuracy")]];
+  const missed = [...new Set(session.ratings.filter(entry => entry.correct === false || entry.rating === "again").map(entry => entry.id))]
+    .map(id => wordsById.get(id)).filter(Boolean);
   return [
     h("section", { class: "card ws-finished" },
       h("div", { class: "ws-finished-mark", "aria-hidden": "true" }, icon("check")),
@@ -629,9 +640,18 @@ function finishedView() {
       h("p", { class: "hint-line" }, sessionLabel(session)),
       h("div", { class: "ws-results" }, results.map(([count, label]) => h("div", null, h("strong", null, count), h("span", null, label)))),
       session.options.practice !== "cards" && selfRated ? h("p", { class: "hint-line" }, t("wstudy.selfRatedCount", { n: selfRated })) : null,
-      h("p", { class: "hint-line" }, t("wstudy.nextReview"))),
+      h("p", { class: "hint-line" }, t("wstudy.nextReview")),
+      missed.length ? h("div", { class: "ws-missed" },
+        h("h2", null, t("wstudy.missedTitle")),
+        h("ul", null, missed.map(word => h("li", null,
+          h("b", { lang: "en" }, word.term),
+          h("span", { lang: "zh-CN" }, String(word.meaning || "").split("\n")[0]),
+          speakBtn(word.term, t("wstudy.listen")))))) : null),
     h("div", { class: "ws-start-actions" },
-      h("button", { type: "button", class: "btn primary big", onclick: action(() => { saved.options = { ...session.options }; begin("random"); }) }, t("wstudy.nextBatch")),
+      // Missed words right away, while the mistake is fresh (they also come back in later reviews).
+      missed.length ? h("button", { type: "button", class: "btn primary big", onclick: action(() => retry(session, missed)) },
+        t("wstudy.retryMissed", { n: missed.length })) : null,
+      h("button", { type: "button", class: `btn ${missed.length ? "" : "primary "}big`, onclick: action(() => { saved.options = { ...session.options }; begin("random"); }) }, t("wstudy.nextBatch")),
       h("button", { type: "button", class: "btn big", onclick: action(backToSetup) }, t("wstudy.changeOptions"))),
   ];
 }
