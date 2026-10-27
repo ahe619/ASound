@@ -6,7 +6,7 @@ import { t, getLanguage } from "./i18n.js";
 import { askJSON, aiErrorText } from "./ai.js";
 import * as P from "./prompts.js";
 import { readingMatch } from "./diff.js";
-import { speakBtn, stopSpeaking, unlockAudio } from "./speech.js";
+import { speakBtn, stopSpeaking, unlockAudio, prefetchSpeech } from "./speech.js";
 import { micButton } from "./mic.js";
 import { checks, drillStore } from "./store.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
@@ -142,6 +142,7 @@ function moveDrill(step) {
 
 function renderDrill() {
   const d = drillById(drill.drillId), it = drill.items[drill.idx];
+  prefetchSpeech(it.text); // "Listen" is the first thing a learner taps on a drill sentence
   const result = h("div", { class: "stack-sm" });
   if (it.attempt) paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill));
   const ipaLine = it.ipa ? h("p", { class: "ipa-line", hidden: !prefs.showIpa }, fmtIpa(it.ipa)) : null;

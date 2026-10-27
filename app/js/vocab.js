@@ -3,7 +3,7 @@
 import { $, h, fill, icon, str, fmtIpa, meter } from "./util.js";
 import { t } from "./i18n.js";
 import { vocab } from "./store.js";
-import { speakBtn, speak, unlockAudio, stopSpeaking } from "./speech.js";
+import { speakBtn, speak, unlockAudio, stopSpeaking, prefetchSpeech } from "./speech.js";
 import { micButton } from "./mic.js";
 import { readingMatch } from "./diff.js";
 import { confirmInline, fmtDay } from "./widgets.js";
@@ -116,6 +116,7 @@ function renderReview() {
   const v = current();
   if (!v) { finishReview(); return; }
   const check = h("div", { class: "say-check" });
+  if (!review.revealed) prefetchSpeech(str(v.term)); // ready when it is revealed
   // Speak the answer once when it is revealed (not on every render of the revealed card).
   const reveal = () => { review.revealed = true; renderReview(); speak(str(v.term), null); };
   const front = v.meaning ? v.meaning : t("review.listenFront");
