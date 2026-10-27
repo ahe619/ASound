@@ -177,9 +177,9 @@
       const req = {
         messages,
         stream: true,
-        temperature: json ? 0.3 : 0.8,
+        temperature: json ? 0.3 : /0\.8B|llm-cpu/i.test(MODEL_ID) ? 0.6 : 0.8, // small models drift at high temperature
         top_p: 0.9,
-        max_tokens: json ? 1600 : 400,
+        max_tokens: json ? (/0\.8B|llm-cpu/i.test(MODEL_ID) ? 900 : 1600) : 400, // small models loop: stop them sooner
         extra_body: { enable_thinking: false },
       };
       // Grammar-constrained decoding guarantees parseable JSON; WebLLM wants the schema as a string.
@@ -222,7 +222,31 @@
     if (fence) { try { return JSON.parse(fence[1]); } catch {} }
     const a = text.search(/[[{]/), b = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
     if (a >= 0 && b > a) { try { return JSON.parse(text.slice(a, b + 1)); } catch {} }
+    const saved = salvageJSON(text);
+    if (saved) return saved;
     throw { code: "invalid_json", message: "reply was not JSON", text };
+  }
+
+  // A reply cut off by the length limit (small models sometimes repeat a list until they hit it): keep every
+  // complete field by cutting back to a comma and closing the open brackets.
+  function salvageJSON(text) {
+    const start = text.indexOf("{");
+    if (start < 0) return null;
+    const s = text.slice(start);
+    for (let cut = s.lastIndexOf(","); cut > 0; cut = s.lastIndexOf(",", cut - 1)) {
+      const head = s.slice(0, cut);
+      const stack = [];
+      let inStr = false, esc = false;
+      for (const ch of head) {
+        if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === "\"") inStr = false; continue; }
+        if (ch === "\"") inStr = true;
+        else if (ch === "{" || ch === "[") stack.push(ch);
+        else if (ch === "}" || ch === "]") stack.pop();
+      }
+      if (inStr) continue;
+      try { return JSON.parse(head + stack.reverse().map((c) => (c === "{" ? "}" : "]")).join("")); } catch {}
+    }
+    return null;
   }
 
   function sample(input, opts = {}) { return generate(input, opts, false); }

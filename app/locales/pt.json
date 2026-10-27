@@ -444,5 +444,8 @@
   "native.send": "Ver em inglês",
   "native.needPack": "Para falar em voz alta, baixe “Ajuda no seu idioma” em Modelos e downloads. Por enquanto, você pode digitar.",
   "modes.title": "Mais formas de praticar",
-  "modes.failed": "Não foi possível iniciar este modo de prática."
+  "modes.failed": "Não foi possível iniciar este modo de prática.",
+  "mic.err.noModel": "Para usar a voz, é preciso o modelo de escuta (cerca de 32 MB). Abrindo os downloads…",
+  "mic.err.asrLoad": "O modelo de escuta não carregou. Baixe de novo em Modelos e downloads.",
+  "check.fallback": "Pratique as palavras que não foram reconhecidas: ouça e leia o parágrafo de novo."
 }

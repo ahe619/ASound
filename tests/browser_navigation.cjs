@@ -72,6 +72,7 @@ const server = http.createServer((req, res) => {
     await page.click('#ws-practice-spelling');
     await page.getByRole('button', { name: '开始随机学习', exact: true }).click();
     await page.locator('#ws-spelling').fill(' unfinished draft ');
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('asound.wordstudy.v1')).session.draft === ' unfinished draft ');
     const original = await study();
     const practiceId = (await nav()).id, practiceLength = await count();
     assert.equal((await nav()).route.detail, 'practice');

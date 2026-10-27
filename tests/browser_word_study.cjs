@@ -175,7 +175,7 @@ const server = http.createServer((req, res) => {
     await page.locator('.ws-grade.good').click();
     await page.locator('#ws-finished').waitFor();
     assert.equal((await read()).progress.reservation.answers, undefined);
-    assert.deepEqual(await page.locator('.ws-results strong').allTextContents(), ['0', '0', '—']);
+    assert.deepEqual(await page.locator('.ws-results strong').allTextContents(), ['0', '0', '-']);
     await seed('spelling');
     await page.evaluate(() => ASoundTheme.setMode('dark'));
     await page.screenshot({ path: path.join(out, 'spelling-question-phone-night.png') });

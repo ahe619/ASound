@@ -49,7 +49,37 @@ let active = [];          // playing AudioBufferSourceNodes
 let seq = 0;
 let speakingBtn = null;
 let unlocked = false;
+// Synthesized audio, least recently played first. "Listen" again (or the next card's word) plays at once instead
+// of being generated again; capped by total length (three minutes of speech, about 17 MB) for phones.
 const nativeCache = new Map();
+const CACHE_SECONDS = 180;
+function cachedAudio(key) {
+  const buf = nativeCache.get(key);
+  if (buf) { nativeCache.delete(key); nativeCache.set(key, buf); }
+  return buf;
+}
+// The cached audio for `key`, or the generation already under way for it (a prefetch and a tap on "Listen" for the
+// same word share one), or a new one from make().
+const inflight = new Map();
+function shared(key, make) {
+  const hit = cachedAudio(key);
+  if (hit) return Promise.resolve(hit);
+  if (!inflight.has(key)) {
+    inflight.set(key, Promise.resolve().then(make).then((buf) => keepAudio(key, buf)).finally(() => inflight.delete(key)));
+  }
+  return inflight.get(key);
+}
+function keepAudio(key, buf) {
+  nativeCache.set(key, buf);
+  let total = 0;
+  for (const b of nativeCache.values()) total += b.duration;
+  for (const [k, b] of nativeCache) {
+    if (total <= CACHE_SECONDS || k === key) break;
+    total -= b.duration;
+    nativeCache.delete(k);
+  }
+  return buf;
+}
 let browserMod = null;
 let browserModulePromise = null;
 let voiceConfig = null;
@@ -206,6 +236,53 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
   route(clean, mine, rate, voice, done);
 }
 
+// Make the audio for a word or a short line ahead of time (the card on screen, the next card) so playing it starts
+// at once. Uses the engine speak() would use first; system speech needs nothing. Failures are left to speak().
+export function prefetchSpeech(text, rateMul = 1) {
+  const clean = str(text);
+  if (!clean || clean.length > 200 || status.native === null) return; // health check pending: engine unknown
+  if (systemVoicesPending) loadSystemVoices(); // as speak() does: the list can arrive late (Android Chrome)
+  const capabilities = voiceCapabilities();
+  // Phones on "auto" speak with the system voice once its list arrives, so make nothing before then.
+  if (capabilities.systemPending && capabilities.mobile && prefs.voiceEngine === "auto") return;
+  const order = speechEngineOrder({ ...capabilities, preference: prefs.voiceEngine, natural: status.natural });
+  // Mobile WASM inference competes with the current lesson. Keep downloaded voices
+  // on demand instead of queuing work for cards the learner may skip.
+  if (capabilities.mobile && order[0] === "browser") return;
+  const chunk = { natural: naturalChunk, native: nativeChunk, browser: browserChunk }[order[0]];
+  if (!chunk) return;
+  const rate = clamp(prefs.rate * rateMul, 0.5, 1.6);
+  const mine = seq, voice = prefs.voice;
+  for (const part of chunk === nativeChunk ? [clean] : sentences(clean)) {
+    if (chunk === browserChunk) { prefetchInPage(part, rate, voice, mine); continue; }
+    Promise.resolve().then(() => {
+      if (mine === seq) return chunk(part, rate, voice, mine);
+    }).catch(() => {});
+  }
+}
+
+// The in-page voice makes one line at a time and cannot drop a line it was given, so lines made ahead of time go
+// to it one by one, newest kept: a tap on "Listen" then waits behind at most one line for a skipped card.
+const ahead = [];
+let aheadBusy = false;
+function prefetchInPage(text, rate, voice, mine) {
+  const key = `${voice}|${rate}|${text}`;
+  const i = ahead.findIndex(job => job.key === key);
+  if (i >= 0) ahead.splice(i, 1);
+  ahead.push({ key, text, rate, voice, mine });
+  if (ahead.length > 2) ahead.shift(); // this card and the next
+  if (!aheadBusy) runAhead();
+}
+async function runAhead() {
+  aheadBusy = true;
+  try {
+    while (ahead.length) {
+      const job = ahead.shift();
+      if (job.mine === seq) await browserChunk(job.text, job.rate, job.voice, job.mine).catch(() => {});
+    }
+  } finally { aheadBusy = false; }
+}
+
 async function route(text, mine, rate, voice, done) {
   // System speech can start immediately even if a static host's health check is pending.
   loadSystemVoices();
@@ -239,38 +316,36 @@ async function route(text, mine, rate, voice, done) {
   done();
 }
 
-async function nativeChunk(text, rate, voice) {
-  const key = `${voice}|${rate}|${text}`;
-  if (nativeCache.has(key)) return nativeCache.get(key);
-  const res = await fetch("api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice, speed: rate }),
+function nativeChunk(text, rate, voice) {
+  return shared(`${voice}|${rate}|${text}`, async () => {
+    const res = await fetch("api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice, speed: rate }),
+    });
+    if (!res.ok) throw new Error(`native speech ${res.status}`);
+    return ctx().decodeAudioData(await res.arrayBuffer());
   });
-  if (!res.ok) throw new Error(`native speech ${res.status}`);
-  const buf = await ctx().decodeAudioData(await res.arrayBuffer());
-  nativeCache.set(key, buf);
-  if (nativeCache.size > 200) nativeCache.delete(nativeCache.keys().next().value);
-  return buf;
 }
 
-async function naturalChunk(text, rate, voice) {
-  const key = `natural|${voice}|${text}`;
-  if (nativeCache.has(key)) return nativeCache.get(key);
-  const res = await fetch("api/tts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice, speed: rate, engine: "natural" }),
+function naturalChunk(text, rate, voice) {
+  return shared(`natural|${voice}|${text}`, async () => {
+    const res = await fetch("api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice, speed: rate, engine: "natural" }),
+    });
+    if (!res.ok) { readHealth(); throw new Error(`natural speech ${res.status}`); }
+    return ctx().decodeAudioData(await res.arrayBuffer());
   });
-  if (!res.ok) { readHealth(); throw new Error(`natural speech ${res.status}`); }
-  const buf = await ctx().decodeAudioData(await res.arrayBuffer());
-  nativeCache.set(key, buf);
-  return buf;
 }
 
 // Where the in-page voice finds its files (js/packs.js engineConfig): this computer, or the download cache.
 export function configureVoice(cfg) {
-  if (JSON.stringify(cfg || null) !== JSON.stringify(voiceConfig)) stopSpeaking();
+  if (JSON.stringify(cfg || null) !== JSON.stringify(voiceConfig)) {
+    stopSpeaking();
+    for (const key of [...nativeCache.keys()]) if (key.startsWith("browser|")) nativeCache.delete(key); // another voice model
+  }
   voiceConfig = cfg || null;
   if (browserMod && browserMod.configure && cfg) browserMod.configure(cfg);
   if (!cfg && browserMod?.dispose) browserMod.dispose();
@@ -291,11 +366,13 @@ async function browserChunk(text, rate, voice, mine) {
   await browserModulePromise;
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
-  const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+  const buf = await shared(`browser|${voice}|${rate}|${text}`, async () => {
+    const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+    const out = ctx().createBuffer(1, pcm.length, sr);
+    out.copyToChannel(pcm, 0);
+    return out;
+  });
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
-  const a = ctx();
-  const buf = a.createBuffer(1, pcm.length, sr);
-  buf.copyToChannel(pcm, 0);
   return buf;
 }
 

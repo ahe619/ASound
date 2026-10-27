@@ -444,5 +444,8 @@
   "native.send": "Dapatkan versi Inggris",
   "native.needPack": "Untuk mengucapkannya, unduh “Bantuan dalam bahasamu sendiri” di Model. Sekarang kamu bisa mengetiknya.",
   "modes.title": "Cara berlatih lainnya",
-  "modes.failed": "Mode latihan ini tidak bisa dimulai."
+  "modes.failed": "Mode latihan ini tidak bisa dimulai.",
+  "mic.err.noModel": "Fitur suara butuh model pendengar (sekitar 32 MB). Membuka halaman unduhan…",
+  "mic.err.asrLoad": "Model pendengar gagal dimuat. Unduh ulang di Model & unduhan.",
+  "check.fallback": "Latih kata-kata yang belum dikenali: dengarkan dulu, lalu baca paragrafnya lagi."
 }

@@ -545,5 +545,8 @@
   "models.connectionNote": "Once the connection is working, try the download again.",
   "models.webDownloadNote": "Use Wi-Fi for your first download and keep this page open. If interrupted, choose Resume.",
   "models.connectionOptions": "Download connection settings",
-  "models.sourceAndLicense": "Source and license"
+  "models.sourceAndLicense": "Source and license",
+  "mic.err.noModel": "Speech needs the listening model (about 32 MB). Opening downloads...",
+  "mic.err.asrLoad": "The listening model didn't load. Download it again in Models & downloads.",
+  "check.fallback": "Practise the words that weren't recognized: listen to them, then read the paragraph again."
 }

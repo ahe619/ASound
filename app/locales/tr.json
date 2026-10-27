@@ -444,5 +444,8 @@
   "native.send": "İngilizcesini al",
   "native.needPack": "Sesli söylemek için Modeller bölümünden “Kendi dilinde yardım” paketini indir. Şimdilik yazabilirsin.",
   "modes.title": "Pratik yapmanın başka yolları",
-  "modes.failed": "Bu alıştırma modu başlatılamadı."
+  "modes.failed": "Bu alıştırma modu başlatılamadı.",
+  "mic.err.noModel": "Sesli kullanım için dinleme modeli (yaklaşık 32 MB) gerekiyor. İndirme sayfası açılıyor…",
+  "mic.err.asrLoad": "Dinleme modeli yüklenemedi. Modeller ve indirmeler bölümünden yeniden indirin.",
+  "check.fallback": "Tanınmayan kelimeleri çalış: önce dinle, sonra paragrafı tekrar oku."
 }

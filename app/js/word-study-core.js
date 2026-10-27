@@ -9,7 +9,10 @@ const SCENARIO_IDS = new Set(SCENARIOS.map(v => v.id));
 const KEY = "asound.wordstudy.v1";
 const DAY = 86400000;
 const INTERVALS = [0, 1, 3, 7, 14, 30];
-export const PRACTICES = ["cards", "choice", "spelling"];
+export const PRACTICES = ["cards", "choice", "spelling", "say"];
+const ANSWERED = ["choice", "spelling", "say"]; // practices checked automatically (cards are self-rated)
+// Speech can be a full sentence; the microphone can return more than the typed field's 300 characters.
+export const MAX_SPOKEN_RESPONSE_LENGTH = 2000;
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
 const integer = (value, min, max) => Math.max(min, Math.min(max, Math.trunc(finite(value))));
@@ -29,6 +32,36 @@ const meaningKey = value => String(value || "").trim().replace(/\s+/g, " ").toLo
 export const normalizeSpelling = value => String(value ?? "").normalize("NFC").trim().toLowerCase();
 export const spellingCorrect = (answer, term) => !!normalizeSpelling(answer) && normalizeSpelling(answer) === normalizeSpelling(term);
 
+// "Say it": the recognizer's transcript must contain the word (or the phrase), allowing simple inflections of the
+// last word (books, watched, making...). Speech recognition hears "ice-cream" or "ice cream" alike.
+const sayWords = value => normalizeSpelling(value).replace(/[\u2019']/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+// Regular English spelling rules only, so a different word is not taken for a form of the target ("scar" is not
+// "scared", "be" is not "bed"). Words under three letters must be said as they are.
+function inflections(base) {
+  if (base.length < 3 || !/^[a-z]+$/.test(base)) return [];
+  const forms = [];
+  if (/[^aeiou]y$/.test(base)) {
+    const y = base.slice(0, -1);
+    return [y + "ies", y + "ied", base + "ing"];
+  }
+  forms.push(/(s|x|z|ch|sh)$/.test(base) ? base + "es" : base + "s");
+  if (base.endsWith("o")) forms.push(base + "es"); // photos, potatoes
+  if (base.endsWith("ie")) return forms.concat(base + "d", base.slice(0, -2) + "ying");
+  if (base.endsWith("e")) return forms.concat(base + "d", /(ee|ye|oe)$/.test(base) ? base + "ing" : base.slice(0, -1) + "ing");
+  // One-syllable consonant-vowel-consonant words double the last letter (stop: stopped, stopping).
+  const end = /^[^aeiou]*[aeiou][bdgklmnprtvz]$/.test(base) ? base + base.slice(-1) : base;
+  return forms.concat(end + "ed", end + "ing");
+}
+const inflected = (heard, base) => heard === base || inflections(base).includes(heard);
+export function sayCorrect(heard, term) {
+  const said = sayWords(heard), target = sayWords(term);
+  if (!said.length || !target.length) return false;
+  for (let i = 0; i + target.length <= said.length; i++) {
+    if (target.every((w, k) => (k === target.length - 1 ? inflected(said[i + k], w) : said[i + k] === w))) return true;
+  }
+  return false;
+}
+
 // A dictionary-backed alternative is a valid answer to an ambiguous definition,
 // but does not establish recall of the target word. Let the learner try again.
 export function isAlternativeSpelling(answer, word, pool) {
@@ -37,6 +70,13 @@ export function isAlternativeSpelling(answer, word, pool) {
   const definition = meaningKey(word.meaning);
   return !!definition && pool.some(candidate => candidate.id !== word.id
     && spellingCorrect(response, candidate.term) && meaningKey(candidate.meaning) === definition);
+}
+
+export function isAlternativeSaying(answer, word, pool) {
+  if (!sayWords(answer).length || sayCorrect(answer, word.term)) return false;
+  const definition = meaningKey(word.meaning);
+  return !!definition && pool.some(candidate => candidate.id !== word.id
+    && meaningKey(candidate.meaning) === definition && sayCorrect(answer, candidate.term));
 }
 
 export function spellingClue(term) {
@@ -55,15 +95,57 @@ export function meaningChoices(word, pool, rng = Math.random) {
     }
     return rows;
   };
-  const selected = [word];
-  const definitions = new Set([meaningKey(word.meaning)]);
+  // Options that can be ruled out by their form teach nothing. Prefer up to two look-alike words (adapt: adopt,
+  // adept), then words of the same part of speech, then any.
+  const term = String(word.term || "").toLowerCase(), pos = partOfSpeech(word.meaning);
+  const near = Math.max(1, Math.floor(term.length / 4));
+  const lookAlike = [], samePos = [], rest = [];
   for (const candidate of shuffle(shuffled)) {
-    const key = meaningKey(candidate.meaning);
-    if (!key || candidate.id === word.id || definitions.has(key)) continue;
-    definitions.add(key); selected.push(candidate);
-    if (selected.length === 4) break;
+    if (!meaningKey(candidate.meaning) || candidate.id === word.id) continue;
+    const other = String(candidate.term || "").toLowerCase();
+    if (term.length >= 4 && other !== term && editDistance(term, other, near) <= near) lookAlike.push(candidate);
+    else (pos && partOfSpeech(candidate.meaning) === pos ? samePos : rest).push(candidate);
   }
+  const selected = [word];
+  // The first line is what an option shows first: spelling variants (behaviour, behavior) share it and differ only
+  // in a later line, so two options would both be right.
+  const firstLine = value => "1:" + meaningKey(String(value || "").split("\n")[0]);
+  const definitions = new Set([meaningKey(word.meaning), firstLine(word.meaning)]);
+  const take = (rows, limit) => {
+    for (const candidate of rows) {
+      if (selected.length >= limit) return;
+      const key = meaningKey(candidate.meaning), line = firstLine(candidate.meaning);
+      if (definitions.has(key) || definitions.has(line)) continue;
+      definitions.add(key); definitions.add(line); selected.push(candidate);
+    }
+  };
+  take(lookAlike, 3);
+  take(samePos, 4);
+  take(rest, 4);
   return shuffle(selected);
+}
+
+// "vt. ..." -> "v"; the first part of speech in a dictionary definition.
+const partOfSpeech = meaning => {
+  const tag = (String(meaning || "").match(/^\s*([a-z]+)\./) || [])[1] || "";
+  return /^v[ti]?$/.test(tag) ? "v" : tag;
+};
+
+// Levenshtein distance, stopping early once it is certainly above `limit`.
+function editDistance(a, b, limit) {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (next[j] < best) best = next[j];
+    }
+    if (best > limit) return limit + 1;
+    row = next;
+  }
+  return row[b.length];
 }
 
 export function filterWords(words, options = {}) {
@@ -101,14 +183,14 @@ export function gradeProgress(previous, rating, now = Date.now()) {
   if (Number.isInteger(old.answers) && old.answers > 0) {
     next.answers = integer(old.answers, 1, 1000000);
     next.correctAnswers = integer(old.correctAnswers, 0, next.answers);
-    next.lastPractice = ["choice", "spelling"].includes(old.lastPractice) ? old.lastPractice : "choice";
+    next.lastPractice = ANSWERED.includes(old.lastPractice) ? old.lastPractice : "choice";
     next.lastAnswerCorrect = old.lastAnswerCorrect === true;
   }
   return next;
 }
 
 export function answerProgress(previous, correct, practice, now = Date.now()) {
-  if (typeof correct !== "boolean" || !["choice", "spelling"].includes(practice)) throw new Error("Invalid exercise answer");
+  if (typeof correct !== "boolean" || !ANSWERED.includes(practice)) throw new Error("Invalid exercise answer");
   const old = object(previous) ? previous : {};
   const next = gradeProgress(old, correct ? "good" : "again", now);
   next.answers = integer(old.answers, 0, 999999) + 1;
@@ -119,8 +201,8 @@ export function answerProgress(previous, correct, practice, now = Date.now()) {
 }
 
 function cleanAttempt(value) {
-  if (!object(value) || !["choice", "spelling"].includes(value.practice) || typeof value.correct !== "boolean"
-      || typeof value.response !== "string" || value.response.length > 300) return null;
+  if (!object(value) || !ANSWERED.includes(value.practice) || typeof value.correct !== "boolean"
+      || typeof value.response !== "string" || value.response.length > (value.practice === "say" ? MAX_SPOKEN_RESPONSE_LENGTH : 300)) return null;
   return { practice: value.practice, response: value.response, correct: value.correct, answeredAt: Math.max(0, finite(value.answeredAt)) };
 }
 
@@ -134,7 +216,7 @@ function cleanState(value) {
     if (Number.isInteger(entry.answers) && entry.answers > 0) {
       progress[id].answers = integer(entry.answers, 1, 1000000);
       progress[id].correctAnswers = integer(entry.correctAnswers, 0, progress[id].answers);
-      progress[id].lastPractice = ["choice", "spelling"].includes(entry.lastPractice) ? entry.lastPractice : "choice";
+      progress[id].lastPractice = ANSWERED.includes(entry.lastPractice) ? entry.lastPractice : "choice";
       progress[id].lastAnswerCorrect = entry.lastAnswerCorrect === true;
     }
   }
@@ -144,13 +226,14 @@ function cleanState(value) {
       && candidate.ids.every(id => typeof id === "string" && id.length > 0 && id.length <= 100)
       && new Set(candidate.ids).size === candidate.ids.length
       && Number.isInteger(candidate.index) && candidate.index >= 0 && candidate.index <= candidate.ids.length) {
+    const options = normalizeOptions(candidate.options);
     session = { ids: [...candidate.ids], index: candidate.index, revealed: candidate.revealed === true,
       ratings: Array.isArray(candidate.ratings) ? candidate.ratings.filter(row => object(row)
         && candidate.ids.includes(row.id) && ["good", "hard", "again"].includes(row.rating)).slice(0, candidate.ids.length)
         .map(row => ({ id: row.id, rating: row.rating, ...(cleanAttempt(row) || {}) })) : [],
-      options: normalizeOptions(candidate.options), mode: candidate.mode === "review" ? "review" : "random",
+      options, mode: candidate.mode === "review" ? "review" : "random",
       choices: Array.isArray(candidate.choices) ? candidate.choices.filter(id => typeof id === "string" && id.length <= 100).slice(0, 4) : [],
-      draft: typeof candidate.draft === "string" ? candidate.draft.slice(0, 300) : "",
+      draft: typeof candidate.draft === "string" ? candidate.draft.slice(0, options.practice === "say" ? MAX_SPOKEN_RESPONSE_LENGTH : 300) : "",
       attempt: cleanAttempt(candidate.attempt) };
   }
   return { options: normalizeOptions(raw.options), progress, session };

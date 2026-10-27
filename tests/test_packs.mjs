@@ -54,14 +54,29 @@ function catalog() {
 }
 
 async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDIA", desktop = false,
-  data = catalog(), prefs = {}, flags = {}, cached = [], partial = {}, fetchRemote = null, download = null } = {}) {
+  data = catalog(), prefs = {}, flags = {}, cached = [], partial = {}, fetchRemote = null, download = null,
+  release = null, controlled = true, runtimeFiles = [], runtimeFetch = null } = {}) {
   const cache = new MemoryCache();
   const stored = new Map([["asound.llmCached.v1", JSON.stringify(flags)]]);
-  const env = { cache, stored, data, requests: [], downloads: [], removedPartial: [], warnings: [], saved: 0,
+  const shell = new MemoryCache();
+  const idle = [], swEvents = new Set();
+  const root = "https://app.test/ASound/";
+  const controller = { scriptURL: root + "sw.js", postMessage: data => env.runtimeCancels.push(data) };
+  const serviceWorker = { controller: controlled ? controller : null,
+    addEventListener: (_type, fn) => swEvents.add(fn), removeEventListener: (_type, fn) => swEvents.delete(fn) };
+  const env = { cache, shell, idle, swEvents, serviceWorker, runtimeFetch, stored, data, requests: [], runtimeRequests: [], runtimeCancels: [], downloads: [], removedPartial: [], warnings: [], saved: 0,
     partials: new Map(), prefs: { source: "auto", llm: "", asr: "", ...prefs },
     remote: fetchRemote || (async (url) => url.endsWith(".wasm")
       ? new Response(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0))
       : Response.json({ model_type: "moonshine" })) };
+  env.control = async () => {
+    serviceWorker.controller = controller;
+    await shell.put(root + "__asound_release__", Response.json({ version: release, installed: 1 }));
+    for (const fn of swEvents) fn();
+  };
+  env.runIdle = () => { for (const fn of idle.splice(0)) fn(); };
+  if (release && controlled) await shell.put(root + "__asound_release__", Response.json({ version: release, installed: 1 }));
+  for (const file of runtimeFiles) await shell.put(root + file, new Response("verified runtime"));
   const keyFor = (file) => "https://models.asound.invalid/" + (file.repo ? `${file.repo}/${file.path}` : file.path);
   for (const id of cached) for (const file of data.packs.find((p) => p.id === id).files) {
     await cache.put(keyFor(file), new Response(new Uint8Array(file.size)));
@@ -74,6 +89,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
     location: { search: "", href: "https://app.test/ASound/" },
     console: { warn: (...args) => env.warnings.push(args) },
     navigator: {
+      ...(release ? { serviceWorker } : {}),
       userAgent: mobile ? "Android Mobile" : "Windows Desktop",
       userAgentData: { mobile }, deviceMemory: 8,
       gpu: gpu ? { requestAdapter: async () => ({ features: new Set(f16 ? ["shader-f16"] : []), info: { vendor } }) } : undefined,
@@ -82,7 +98,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
     prefs: env.prefs, savePrefs: () => { env.saved++; },
     deviceInfo: () => ({ mobile }),
     localStorage: { getItem: (key) => stored.get(key) || null, setItem: (key, value) => stored.set(key, value) },
-    caches: { open: async () => cache },
+    caches: { open: async name => name === "asound-models-v1" ? cache : shell },
     modelPartialBytes: async (key) => env.partials.get(key) || 0,
     discardModelPartial: async (key) => { env.removedPartial.push(key); env.partials.delete(key); },
     downloadModelFile: async (args) => {
@@ -92,12 +108,20 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
       await args.cache.put(args.key, new Response(new Uint8Array(args.file.size)));
       args.onBytes(args.file.size);
     },
-    window: { ASoundAI: { download: async (_config, progress, signal) => { signal.throwIfAborted(); progress(1); } } },
+    window: { requestIdleCallback: fn => idle.push(fn), ASoundAI: { download: async (_config, progress, signal) => { signal.throwIfAborted(); progress(1); } } },
     fetch: async (url, options = {}) => {
       env.requests.push({ url: String(url), options });
       if (url === "packs.json") return Response.json(data);
+      if (String(url) === root + "version.json") return release ? Response.json({ version: release }) : new Response("missing", { status: 404 });
       if (url === "api/health") return Response.json({ packs: desktop });
       if (url === "api/packs" || String(url).startsWith("api/packs/")) return Response.json({ packs: {}, free: 100000 });
+      if (String(url).startsWith(root + "vendor/") || String(url).startsWith(root + "kokoro/")) {
+        env.runtimeRequests.push(String(url).slice(root.length));
+        if (env.runtimeFetch) return env.runtimeFetch(String(url), options, env);
+        const response = new Response("verified runtime");
+        if (serviceWorker.controller) await shell.put(String(url), response.clone());
+        return response;
+      }
       return env.remote(String(url), options);
     },
   };
@@ -229,7 +253,7 @@ test("a deployment-only build drops old source choices and never falls back over
   await env.api.install("voice");
   await until(() => env.api.packStatus("voice").state === "installed", "voice installation should complete");
   assert.deepEqual(Array.from(env.downloads[0].urls), ["https://models.site.test/test/voice/resolve/main/weights.bin"]);
-  assert.ok(env.requests.every((r) => !r.url.startsWith("https://")), "the configured default needs no outside probes");
+  assert.ok(env.requests.every((r) => !r.url.startsWith("https://") || r.url.startsWith("https://app.test/ASound/")), "the configured default needs no outside probes");
   env.api.setSource("mirror");
   assert.equal(env.prefs.source, "auto", "a source omitted from this deployment must remain unavailable");
 });
@@ -347,4 +371,130 @@ test("a finishing download remains cancellable until its storage status refresh 
   assert.equal(waitedForRefresh, true, "remove must wait for the active task's final status refresh too");
   assert.equal(env.api.packStatus("voice").state, "absent", "a stale refresh cannot restore installed status");
   assert.equal(env.cache.entries.size, 0);
+});
+
+const ONNX = ["vendor/transformers/ort-wasm-simd-threaded.jsep.mjs", "vendor/transformers/ort-wasm-simd-threaded.jsep.wasm"];
+const VOICE_RUNTIME = [...ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"];
+
+test("a release pack stays downloading until its required runtime is verified in the offline snapshot", async () => {
+  const entered = deferred(), release = deferred();
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, runtimeFetch: async (url, options, env) => {
+    entered.resolve(); await release.promise; options.signal.throwIfAborted();
+    const response = new Response("verified runtime");
+    await env.shell.put(url, response.clone());
+    return response;
+  } });
+  await env.api.install("voice"); await entered.promise;
+  assert.equal(env.api.packStatus("voice").state, "downloading");
+  assert.equal(env.downloads.length, 1, "weights finish first and stay cached");
+  release.resolve();
+  await until(() => env.api.packStatus("voice").state === "installed", "verified runtime should complete installation");
+  assert.deepEqual(env.runtimeRequests, VOICE_RUNTIME, "voice never downloads the LLM/ASR JS runtimes");
+});
+
+test("runtime HTTP failure is partial and retry keeps weights and already verified runtime files", async () => {
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, runtimeFetch: async (url, _options, env) => {
+    if (url.endsWith(".wasm")) return new Response("unavailable", { status: 503 });
+    const response = new Response("verified runtime"); await env.shell.put(url, response.clone()); return response;
+  } });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "partial", "503 must not count as installed");
+  assert.match(env.api.packStatus("voice").error, /HTTP 503/);
+  assert.equal(env.api.packStatus("voice").runtimeMissing, true);
+  const failedCalls = env.runtimeRequests.length;
+  env.runIdle(); await flush();
+  assert.equal(env.runtimeRequests.length, failedCalls, "late startup idle does not restart a failed manual download");
+  env.runtimeFetch = null; env.runtimeRequests.length = 0;
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "retry should repair only the missing runtime");
+  assert.equal(env.downloads.length, 1);
+  assert.deepEqual(env.runtimeRequests, VOICE_RUNTIME.slice(1), "the previously verified mjs is reused");
+});
+
+test("a successful network response without verified offline storage cannot finish a release pack", async () => {
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, runtimeFetch: async () => new Response("not stored") });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "partial", "uncontrolled response cannot mark installed");
+  assert.match(env.api.packStatus("voice").error, /not saved for this release/);
+  for (const file of VOICE_RUNTIME) await env.shell.put("https://app.test/ASound/" + file, new Response("verified runtime"));
+  const calls = env.requests.length;
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "a retry can reuse a runtime another tab already cached");
+  assert.equal(env.requests.length, calls, "already cached runtime repair makes zero network requests");
+  assert.equal(env.downloads.length, 1);
+});
+
+test("first installation waits for its own controller and cancelling the wait does not restart later", async () => {
+  const env = await fixture({ release: "test-v1", controlled: false, prefs: { source: "hf" } });
+  await env.api.install("voice");
+  await until(() => env.swEvents.size === 1, "the runtime must wait for first service worker activation");
+  assert.equal(env.api.packStatus("voice").state, "downloading");
+  assert.deepEqual(env.runtimeRequests, []);
+  await env.api.cancel("voice");
+  assert.equal(env.swEvents.size, 0);
+  assert.equal(env.api.packStatus("voice").state, "partial");
+  await env.control(); env.runIdle(); await flush();
+  assert.deepEqual(env.runtimeRequests, [], "controllerchange and startup idle cannot revive a cancelled job");
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "explicit retry works after the controller is ready");
+  assert.equal(env.downloads.length, 1);
+});
+
+test("first installation continues on controllerchange and caches only the selected ASR runtime", async () => {
+  const env = await fixture({ release: "test-v1", controlled: false, prefs: { source: "hf" } });
+  await env.api.install("asr-tiny");
+  await until(() => env.swEvents.size === 1, "waiting for first controller");
+  await env.control();
+  await until(() => env.api.packStatus("asr-tiny").state === "installed", "controller activation should unblock the pending job");
+  assert.deepEqual(env.runtimeRequests, ["vendor/transformers/transformers.min.js", ...ONNX]);
+  assert.equal(env.swEvents.size, 0);
+});
+
+test("cancelling a runtime fetch aborts it, preserves the weights, and allows a clean retry", async () => {
+  const entered = deferred();
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, runtimeFetch: async (_url, { signal }) => {
+    entered.resolve(signal);
+    return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+  } });
+  await env.api.install("voice"); const signal = await entered.promise;
+  let replacementMessages = 0;
+  env.serviceWorker.controller = { scriptURL: "https://app.test/ASound/sw.js", postMessage: () => { replacementMessages++; } };
+  await env.api.cancel("voice");
+  assert.equal(signal.aborted, true);
+  assert.equal(replacementMessages, 0, "cancellation is sent to the controller captured when the fetch began");
+  assert.equal(env.runtimeCancels.length, 1);
+  assert.equal(env.runtimeCancels[0].type, "ASOUND_CANCEL_RUNTIME");
+  assert.equal(env.runtimeCancels[0].requestId, env.requests.find(r => r.options.headers?.["X-ASound-Runtime-Request"]).options.headers["X-ASound-Runtime-Request"]);
+  assert.equal(env.api.packStatus("voice").state, "partial");
+  env.runtimeFetch = null;
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "cancelled runtime can be retried");
+  assert.equal(env.downloads.length, 1);
+});
+
+test("startup repairs old weight-only packs in the serial queue without blocking initialization", async () => {
+  const entered = deferred(), release = deferred();
+  const env = await fixture({ release: "test-v1", cached: ["asr-tiny", "voice"], prefs: { source: "hf" }, runtimeFetch: async (url, _options, env) => {
+    entered.resolve(); await release.promise;
+    const response = new Response("verified runtime"); await env.shell.put(url, response.clone()); return response;
+  } });
+  assert.equal(env.api.packStatus("voice").state, "partial");
+  assert.equal(env.api.packStatus("asr-tiny").state, "partial");
+  assert.deepEqual(env.runtimeRequests, [], "initPacks returns before main registers the worker");
+  env.runIdle(); await entered.promise;
+  assert.equal(env.api.packStatus("voice").state, "queued");
+  assert.equal(env.runtimeRequests.length, 1, "runtime loads are serial");
+  release.resolve();
+  await until(() => env.api.packStatus("voice").state === "installed", "queued repair should complete");
+  assert.equal(env.downloads.length, 0);
+  assert.equal(env.runtimeRequests.length, 6, "shared ONNX files are fetched only once");
+});
+
+test("an already verified release pack is installed offline with no runtime downloads", async () => {
+  const env = await fixture({ release: "test-v1", cached: ["voice"], runtimeFiles: VOICE_RUNTIME,
+    fetchRemote: async () => { throw new TypeError("offline"); } });
+  assert.equal(env.api.packStatus("voice").state, "installed");
+  env.runIdle(); await flush();
+  assert.deepEqual(env.runtimeRequests, []);
+  assert.equal(env.downloads.length, 0);
 });

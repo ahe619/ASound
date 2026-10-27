@@ -46,6 +46,13 @@ an NVIDIA graphics card. Mobile performance still needs validation on real devic
 - **More practice** - Talk includes Shrinking Retell (three progressively shorter rounds) and Phone Practice;
   Accent includes Reduction Ladder (listen to reduced speech, slow down as needed, then work back up).
 - **Vocab** - everything you saved, with audio, plus spoken review (see the meaning, say the English, spaced repetition).
+  Word study over the everyday, CET-4, CET-6 and postgraduate lists: flashcards, multiple choice (with look-alike
+  traps such as affect / effect, advice / advise), spelling and **Say it** (see the picture and the meaning, say the
+  word in a short sentence, then compare model / you / model). On a computer: 1-4 (or A-D) answer or rate,
+  Space shows the answer, Enter goes on.
+  611 everyday words have a picture (drawn locally with Z-Image-Turbo, Apache-2.0, checked to contain no text), and
+  cards show the **American** pronunciation first (General American IPA from ASound's lexicon, the dictionary's
+  British one beside it).
 - **Me** - five levels (Beginner, Foundational, Skilled, Talented, Master); a placement test built from 5 words you
   choose or a topic; an "about you" interview; a voice recommendation based on your own pitch.
 - **Settings** - automatic / phone / tablet / desktop layouts, interface and help languages, downloadable
@@ -108,7 +115,7 @@ Text study needs no AI model. The list provenance, coverage and regeneration ins
 | `server.py`, `packs.py`, `launcher.py` | local server, model downloads, exe entry point |
 | `.venv-voice/`, `voice_server.py` | optional natural voice (Chatterbox, CUDA PyTorch) |
 | `mobile/` | Android app shell and the iOS plan |
-| `tools/` | `build_release.ps1` (Windows zip), `build_android.ps1`, `build_packs.py` (model catalog), `check_i18n.py`, `ascii_code.py`, `make_icon.py` |
+| `tools/` | `build_release.ps1` (Windows zip), `build_android.ps1`, `build_packs.py` (model catalog), `modulepreload.py` (keeps index.html's preload list in step), `gen_word_images.py` / `word_images_qa.py` / `word_images_manifest.py` (word pictures: draw on a local GPU, OCR-check, publish), `american_ipa.py`, `check_i18n.py`, `ascii_code.py`, `make_icon.py` |
 | `branding/` | logo (SVG, PNG, ICO) and voice samples |
 
 Licenses: see [LICENSES.md](LICENSES.md).

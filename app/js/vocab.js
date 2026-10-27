@@ -3,7 +3,7 @@
 import { $, h, fill, icon, str, fmtIpa, meter } from "./util.js";
 import { t } from "./i18n.js";
 import { vocab } from "./store.js";
-import { speakBtn, speak, unlockAudio, stopSpeaking } from "./speech.js";
+import { speakBtn, speak, unlockAudio, stopSpeaking, prefetchSpeech } from "./speech.js";
 import { micButton } from "./mic.js";
 import { readingMatch } from "./diff.js";
 import { confirmInline, fmtDay } from "./widgets.js";
@@ -53,14 +53,22 @@ export function renderVocab() {
   const list = q ? all.filter((v) => [v.term, v.meaning, v.example].map(str).join(" ").toLowerCase().includes(q)) : all;
   const search = h("input", { type: "search", class: "search", id: "vocab-search", placeholder: t("vocab.search"), "aria-label": t("vocab.search") });
   search.value = query;
-  search.addEventListener("input", () => {
+  // Typing filters the list only (the page and the search box stay), a moment after the last key and not in
+  // the middle of an IME composition (pinyin input).
+  let timer = 0;
+  const refilter = () => {
     query = search.value;
-    const pos = search.selectionStart;
-    renderVocab();
-    const again = $("#vocab-search");
-    again.focus();
-    try { again.setSelectionRange(pos, pos); } catch {}
+    const q2 = query.toLowerCase();
+    const rows = q2 ? all.filter((v) => [v.term, v.meaning, v.example].map(str).join(" ").toLowerCase().includes(q2)) : all;
+    const holder = $("#vocab-results");
+    if (holder) fill(holder, rows.length ? h("ol", { class: "vocab-list" }, rows.map(item)) : h("div", { class: "empty" }, all.length ? t("vocab.noMatch") : t("vocab.empty")));
+  };
+  search.addEventListener("input", (event) => {
+    if (event.isComposing) return;
+    clearTimeout(timer);
+    timer = setTimeout(refilter, 150);
   });
+  search.addEventListener("compositionend", () => { clearTimeout(timer); timer = setTimeout(refilter, 150); });
   fill($("#vocab"),
     sections(),
     h("div", { class: "vocab-head" }, h("h1", { class: "title" }, t("vocab.title")), h("span", { class: "pill" }, t("vocab.count", { n: all.length }))),
@@ -70,9 +78,9 @@ export function renderVocab() {
         h("div", { class: "stack-xs", style: "flex:1;min-width:200px" }, h("strong", null, due.length ? t("review.due", { n: due.length }) : t("review.none")), h("span", { class: "hint-line" }, t("review.how"))),
         h("button", { type: "button", class: "btn hot", disabled: !due.length, onclick: startReview }, icon("mic"), t("review.start")))) : null,
     search,
-    list.length
+    h("div", { id: "vocab-results" }, list.length
       ? h("ol", { class: "vocab-list" }, list.map(item))
-      : h("div", { class: "empty" }, all.length ? t("vocab.noMatch") : t("vocab.empty")));
+      : h("div", { class: "empty" }, all.length ? t("vocab.noMatch") : t("vocab.empty"))));
 }
 
 function item(v) {
@@ -108,9 +116,11 @@ function renderReview() {
   const v = current();
   if (!v) { finishReview(); return; }
   const check = h("div", { class: "say-check" });
-  const reveal = () => { review.revealed = true; renderReview(); };
+  if (!review.revealed) prefetchSpeech(str(v.term)); // ready when it is revealed
+  // Speak the answer once when it is revealed (not on every render of the revealed card).
+  const reveal = () => { review.revealed = true; renderReview(); speak(str(v.term), null); };
   const front = v.meaning ? v.meaning : t("review.listenFront");
-  const mic = micButton({ big: true, label: t("review.sayIt"), onText: (heard) => { review.heard = heard; review.revealed = true; renderReview(); } });
+  const mic = micButton({ big: true, label: t("review.sayIt"), onText: (heard) => { review.heard = heard; review.revealed = true; renderReview(); speak(str(v.term), null); } });
   const parts = [
     h("header", { class: "sum-head" },
       h("button", { type: "button", class: "btn quiet back", onclick: () => goBack({ tab: "vocab", detail: "saved" }) }, icon("back"), t("review.stop")),
@@ -142,7 +152,6 @@ function renderReview() {
       h("button", { type: "button", class: "btn", onclick: () => grade(v, "hard") }, t("review.hard")),
       h("button", { type: "button", class: "btn", onclick: () => grade(v, "again") }, t("review.again"))));
     fill(card, kids, check);
-    speak(str(v.term), null);
   }
   fill($("#vocab"), parts, card);
 }
@@ -155,11 +164,11 @@ function grade(v, how) {
   if (how === "good") { next = Math.min(5, box + 1); due = now + INTERVALS[next]; }
   else if (how === "hard") { next = Math.max(1, box); due = now + DAY; }
   else { next = 0; due = now + 10 * 60 * 1000; }
-  vocab.update(v.id, { box: next, due, reviewedAt: now });
   review.done++;
   review.idx++;
   review.revealed = false;
   review.heard = "";
+  vocab.update(v.id, { box: next, due, reviewedAt: now }); // may re-render the tab: the state above is already the next card
   if (review.idx >= review.ids.length) finishReview(); else renderReview();
 }
 

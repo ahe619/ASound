@@ -27,9 +27,16 @@ export async function applyEngines() {
   }
 }
 
+// Settles once the installed packs have been looked at and configured (the hosted page shows before that).
+let applied;
+export const enginesApplied = new Promise((resolve) => { applied = resolve; });
+
 export async function startEngines(onChange) {
   await initPacks().catch((e) => console.warn("model packs", e));
-  await applyEngines();
-  onPacks(() => { applyEngines(); if (onChange) onChange(); });
+  try { await applyEngines(); } finally { applied(); }
+  // Downloads report progress many times a second; the models page needs at most a few redraws per second.
+  let pending = 0;
+  const redraw = () => { if (!onChange || pending) return; pending = setTimeout(() => { pending = 0; onChange(); }, 250); };
+  onPacks(() => { applyEngines(); redraw(); });
   document.addEventListener("asound:packs-chosen", applyEngines);
 }

@@ -8,13 +8,13 @@ const source = readFileSync(new URL("../app/js/speech.js", import.meta.url), "ut
   .replace(/^import .*;\r?\n/gm, "")
   .replace(/^export /gm, "")
   .replace('import("../kokoro/neural-tts.js")', "loadBrowserModule()")
-  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp };";
+  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp, prefetchSpeech };";
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 const en = { name: "English", lang: "en-US" };
 
 function fixture({ mobile = true, preference = "auto", voices = [en], system = true,
   health = null, search = "", failStart = false, healthGate = null, browserGate = null, synthesisGate = null } = {}) {
-  const requests = [], utterances = [], sources = [], timers = new Map(), listeners = {};
+  const requests = [], utterances = [], sources = [], timers = new Map(), listeners = {}, synthesized = [];
   let serial = 0, imports = 0, syntheses = 0, currentVoices = voices, currentHealth = health;
   const prefs = { voiceEngine: preference, voice: "af_heart", rate: 1 };
   const buffer = () => ({ length: 80, duration: 0.01, sampleRate: 24000,
@@ -58,8 +58,8 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
     async loadBrowserModule() {
       imports++;
       if (browserGate) await browserGate;
-      return { configure() {}, onStatus() {}, async synthesize() {
-        syntheses++;
+      return { configure() {}, onStatus() {}, async synthesize(text) {
+        syntheses++; synthesized.push(text);
         if (synthesisGate) await synthesisGate;
         return { pcm: new Float32Array(80), sr: 24000 };
       } };
@@ -68,7 +68,7 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
   vm.runInContext("globalThis.window = globalThis;", context);
   vm.runInContext(source, context, { filename: "speech.js" });
   return { ...context.speech, prefs, requests, utterances, sources, timers,
-    imports: () => imports, syntheses: () => syntheses,
+    imports: () => imports, syntheses: () => syntheses, synthesized: () => [...synthesized],
     setHealth: value => { currentHealth = value; },
     setVoices(value) { currentVoices = value; listeners.voiceschanged?.(); },
   };
@@ -101,6 +101,119 @@ test("explicit natural voices (standard preference) still use the installed brow
   assert.equal(f.voiceCapabilities().canNatural, false);
   assert.ok(f.requests.every(r => r.path === "api/health"));
   assert.equal(f.prefs.voiceEngine, "standard");
+});
+
+test("a repeated or prefetched line is generated once; another voice model starts afresh", async () => {
+  const f = fixture({ mobile: false, preference: "standard" });
+  f.configureVoice({ mode: "web", base: "/voices/" });
+  f.speak("Hello."); await flush();
+  f.speak("Hello."); await flush();
+  assert.equal(f.syntheses(), 1);
+  f.prefetchSpeech("Goodbye."); await flush();
+  assert.equal(f.syntheses(), 2);
+  f.speak("Goodbye."); await flush();
+  assert.equal(f.syntheses(), 2);
+  assert.equal(f.speechStatus().engine, "browser");
+  f.configureVoice({ mode: "web", base: "/other-voices/" });
+  f.speak("Hello."); await flush();
+  assert.equal(f.syntheses(), 3);
+});
+
+test("mobile browser voices remain on demand instead of prefetching skipped cards", async () => {
+  for (const options of [{ preference: "standard" }, { voices: [{ lang: "zh-CN" }] }]) {
+    const f = fixture(options);
+    f.configureVoice({ mode: "web" }); await flush();
+    for (const word of ["old one", "old two", "current"]) f.prefetchSpeech(word);
+    await flush();
+    assert.equal(f.imports(), 0);
+    assert.equal(f.syntheses(), 0);
+    f.speak("current"); await flush();
+    assert.equal(f.syntheses(), 1);
+    assert.equal(f.sources.length, 1);
+  }
+});
+
+test("mobile auto prefetch makes nothing while the system voice list is still loading", async () => {
+  // Chrome on Android lists its voices a moment after the page starts; speak() then uses the system voice.
+  for (const options of [{}, { health: { tts: true } }]) {
+    const f = fixture({ voices: [], ...options });
+    if (!options.health) f.configureVoice({ mode: "web" });
+    await flush();
+    f.prefetchSpeech("apple"); await flush();
+    assert.equal(f.imports(), 0);
+    assert.ok(f.requests.every(r => r.path === "api/health"), "no server audio either");
+    f.setVoices([en]);
+    f.speak("apple"); await flush();
+    assert.equal(f.speechStatus().engine, "system");
+    assert.equal(f.imports(), 0);
+  }
+});
+
+test("desktop prefetch for the in-page voice keeps at most one skipped card ahead of a tap", async () => {
+  let release;
+  const f = fixture({ mobile: false, preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  for (let card = 0; card < 10; card++) {
+    f.stopSpeaking(); // word study stops speech on each new card
+    f.prefetchSpeech(`word ${card}`); f.prefetchSpeech(`word ${card + 1}`); await flush();
+  }
+  f.speak("word 9"); await flush();
+  assert.deepEqual(f.synthesized(), ["word 0", "word 9"], "the voice runs one line at a time, in order");
+  release(); await flush();
+  assert.equal(f.sources.length, 1);
+  assert.deepEqual(f.synthesized(), ["word 0", "word 9"], "lines for skipped cards are never made");
+});
+
+test("desktop prefetch for the in-page voice makes the newest lines once the running one is done", async () => {
+  let release;
+  const f = fixture({ mobile: false, preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  for (let n = 0; n < 6; n++) f.prefetchSpeech(`line ${n}`);
+  f.prefetchSpeech("line 4"); await flush();
+  assert.deepEqual(f.synthesized(), ["line 0"]);
+  release(); await flush();
+  assert.deepEqual(f.synthesized(), ["line 0", "line 5", "line 4"]);
+  f.speak("line 4"); await flush();
+  assert.equal(f.syntheses(), 3, "made ahead of time, so it plays at once");
+  assert.equal(f.sources.length, 1);
+});
+
+test("stopping desktop prefetch during module import drops obsolete tasks", async () => {
+  let release;
+  const f = fixture({ mobile: false, preference: "standard", browserGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  f.prefetchSpeech("old one"); f.prefetchSpeech("old two"); await flush();
+  assert.equal(f.imports(), 1);
+  f.stopSpeaking();
+  release(); await flush();
+  assert.equal(f.syntheses(), 0);
+});
+
+test("cancelling pending prefetch does not cancel a new requested utterance", async () => {
+  let release;
+  const f = fixture({ mobile: false, preference: "standard", browserGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  f.prefetchSpeech("apple"); await flush();
+  f.speak("apple");
+  release(); await flush();
+  assert.equal(f.syntheses(), 1);
+  assert.equal(f.sources.length, 1);
+  assert.equal(f.speechStatus().engine, "browser");
+});
+
+test("an already running desktop prefetch still shares its result with an explicit playback", async () => {
+  let release;
+  const f = fixture({ mobile: false, preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  f.prefetchSpeech("apple"); await flush();
+  assert.equal(f.syntheses(), 1);
+  f.speak("apple"); await flush();
+  release(); await flush();
+  assert.equal(f.syntheses(), 1);
+  assert.equal(f.sources.length, 1);
+  f.stopSpeaking();
+  f.speak("apple"); await flush();
+  assert.equal(f.syntheses(), 1, "stop does not throw away the completed audio cache");
 });
 
 test("mobile automatic speech starts without waiting for the local-service health check", async () => {

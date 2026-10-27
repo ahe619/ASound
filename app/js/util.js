@@ -51,13 +51,18 @@ const ICONS = {
   globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
   dice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor"/></svg>',
 };
+const iconCache = new Map(); // parse each SVG once; buttons repaint often
 export function icon(name) {
-  const t = document.createElement("template");
-  t.innerHTML = ICONS[name];
-  const svg = t.content.firstChild;
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("class", "ic");
-  return svg;
+  let svg = iconCache.get(name);
+  if (!svg) {
+    const t = document.createElement("template");
+    t.innerHTML = ICONS[name];
+    svg = t.content.firstChild;
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "ic");
+    iconCache.set(name, svg);
+  }
+  return svg.cloneNode(true);
 }
 export const thinkingDots = () => h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i"));
 export function meter(fraction) {

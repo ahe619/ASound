@@ -27,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
 DIRECTORIES = {"css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
+LAZY_PREFIXES = ("vendor/", "kokoro/", "img/vocabulary/",
+                 "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'
 
@@ -132,6 +134,10 @@ def build(source, output, version, license_file=None, model_base_url=None, model
         assets = [{"url": p.relative_to(stage).as_posix(), "sha256": digest(p.read_bytes())}
                   for p in sorted(stage.rglob("*")) if p.is_file() and p.name != ".nojekyll"
                   and p.relative_to(stage).as_posix() not in optional_files]
+        # Speech runtimes and word pictures are cached on first use, not on install (see sw.js).
+        for asset in assets:
+            if asset["url"].startswith(LAZY_PREFIXES):
+                asset["lazy"] = True
         # Include the worker template: changing only its logic must get a fresh cache.
         release = version + "-" + digest((worker + encode(assets) + version).encode("utf-8"))[:12]
         metadata = encode({"version": release, "appVersion": version}) + "\n"

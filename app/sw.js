@@ -9,6 +9,30 @@ const CACHE = PREFIX + RELEASE;
 const MARKER = new URL("__asound_release__", SCOPE).href;
 const urls = new Set(ASSETS.map((a) => new URL(a.url, SCOPE).href));
 const indexURL = new URL("index.html", SCOPE).href;
+const runtimeRequests = new Map();
+const cancelledRuntimes = new Map();
+const RUNTIME_CANCEL_TTL = 60000;
+const RUNTIME_REQUEST_LIMIT = 128;
+const runtimeId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{16,96}$/.test(value);
+
+function pruneRuntimeCancellations() {
+  const before = Date.now() - RUNTIME_CANCEL_TTL;
+  for (const [key, time] of cancelledRuntimes) if (time <= before) cancelledRuntimes.delete(key);
+  while (cancelledRuntimes.size > RUNTIME_REQUEST_LIMIT) cancelledRuntimes.delete(cancelledRuntimes.keys().next().value);
+}
+
+function runtimeRequest(event, asset) {
+  const id = event.request.headers.get("X-ASound-Runtime-Request");
+  if (!event.clientId || !runtimeId(id) || !asset.lazy || !/^(?:vendor|kokoro)\//.test(asset.url)) return null;
+  pruneRuntimeCancellations();
+  const key = `${event.clientId}\n${id}`;
+  // Never let a repeated ID replace another in-flight request's controller.
+  if (runtimeRequests.has(key) || runtimeRequests.size >= RUNTIME_REQUEST_LIMIT) return { rejected: true };
+  const task = { key, controller: new AbortController() };
+  runtimeRequests.set(key, task);
+  if (cancelledRuntimes.has(key)) task.controller.abort();
+  return task;
+}
 
 function inScope(url) {
   return url.origin === SCOPE.origin && url.pathname.startsWith(SCOPE.pathname);
@@ -58,8 +82,18 @@ async function installRelease() {
         const hit = await old.cache.match(url);
         if (hit && await digest(hit) === asset.sha256) { response = hit; break; }
       }
+      // On-demand assets (speech runtimes, word pictures) are not downloaded up front: a first visit on a phone
+      // should not fetch tens of megabytes it may never use. The fetch handler caches them, verified, on first use.
+      // One this device already used (an older release holds it) changed in this release: fetch it now, so the
+      // update still works offline.
+      if (!response && asset.lazy) {
+        let used = false;
+        for (const old of previous) if (await old.cache.match(url)) { used = true; break; }
+        if (!used) continue;
+      }
       if (!response) {
-        response = await fetch(new Request(url, { cache: "no-store", credentials: "same-origin" }));
+        // no-cache: a conditional request, so files the page just loaded come back as 304 (still hash-checked)
+        response = await fetch(new Request(url, { cache: "no-cache", credentials: "same-origin" }));
         if (!response.ok || response.type === "opaque" || await digest(response) !== asset.sha256) {
           throw new Error(`The release file could not be verified: ${asset.url}`);
         }
@@ -84,7 +118,19 @@ self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     // Preserve the preceding complete release. Never touch model or other projects' caches.
     const old = await completeCaches();
-    for (const release of old.slice(1)) await caches.delete(release.name);
+    const doomed = old.slice(1);
+    // An on-demand file first used after this release was installed may sit only in a cache deleted below
+    // (several updates arrived while one window stayed open). Keep a verified copy.
+    const target = await caches.open(CACHE);
+    for (const asset of doomed.length ? ASSETS.filter((a) => a.lazy) : []) {
+      const url = new URL(asset.url, SCOPE).href;
+      if (await target.match(url)) continue;
+      for (const release of doomed) {
+        const hit = await release.cache.match(url);
+        if (hit && await digest(hit) === asset.sha256) { await target.put(url, hit); break; }
+      }
+    }
+    for (const release of doomed) await caches.delete(release.name);
     await self.clients.claim();
   })());
 });
@@ -93,6 +139,19 @@ self.addEventListener("message", (event) => {
   const reply = (data) => event.ports[0] && event.ports[0].postMessage(data);
   if (event.data && event.data.type === "ASOUND_VERSION") {
     reply({ version: RELEASE });
+    return;
+  }
+  if (event.data?.type === "ASOUND_CANCEL_RUNTIME") {
+    const source = event.source;
+    if (!source?.id || !source.url || !inScope(new URL(source.url)) || !runtimeId(event.data.requestId)) return;
+    const key = `${source.id}\n${event.data.requestId}`;
+    // Messages can arrive before the associated fetch event. Keep bounded, short-
+    // lived tombstones, scoped to the sending browser client, for that ordering.
+    cancelledRuntimes.delete(key);
+    cancelledRuntimes.set(key, Date.now());
+    pruneRuntimeCancellations();
+    runtimeRequests.get(key)?.controller.abort();
+    reply({ ok: true });
     return;
   }
   if (!event.data || event.data.type !== "ASOUND_APPLY_UPDATE") return;
@@ -117,18 +176,35 @@ self.addEventListener("fetch", (event) => {
   url.hash = "";
   if (url.href === SCOPE.href) url.href = indexURL;
   if (!urls.has(url.href)) return; // Models, API calls and unrelated URLs have their own policies.
+  const asset = ASSETS.find((a) => new URL(a.url, SCOPE).href === url.href);
+  const runtime = runtimeRequest(event, asset);
   event.respondWith((async () => {
-    const cached = await (await caches.open(CACHE)).match(url.href);
-    if (cached) return cached;
-    // A browser can evict an individual file. Recover only this exact release's bytes.
-    const asset = ASSETS.find((a) => new URL(a.url, SCOPE).href === url.href);
     try {
-      const response = await fetch(new Request(url.href, { cache: "no-store", credentials: "same-origin" }));
+      if (runtime?.rejected) throw new Error("Runtime request limit or duplicate ID");
+      const signal = runtime?.controller.signal || request.signal;
+      signal.throwIfAborted();
+      const cached = await (await caches.open(CACHE)).match(url.href);
+      signal.throwIfAborted();
+      if (cached) return cached;
+      // A browser can evict an individual file. Recover only this exact release's bytes.
+      // An on-demand file first used after this release was installed sits in the previous release's cache.
+      for (const old of await completeCaches()) {
+        const hit = await old.cache.match(url.href);
+        if (hit && await digest(hit) === asset.sha256) {
+          signal.throwIfAborted();
+          await (await caches.open(CACHE)).put(url.href, hit.clone());
+          return hit;
+        }
+      }
+      const response = await fetch(new Request(url.href, { cache: "no-store", credentials: "same-origin", signal }));
       if (response.ok && response.type !== "opaque" && await digest(response) === asset.sha256) {
+        signal.throwIfAborted();
         await (await caches.open(CACHE)).put(url.href, response.clone());
         return response;
       }
-    } catch {}
+    } catch {} finally {
+      if (runtime?.key && runtimeRequests.get(runtime.key) === runtime) runtimeRequests.delete(runtime.key);
+    }
     return new Response("This version is not available offline. Reconnect and check for an update.", {
       status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" },
     });

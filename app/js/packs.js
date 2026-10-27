@@ -42,9 +42,139 @@ export async function initPacks() {
     savePrefs();
   }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
-  if (mode === "web") voiceRoot(); // Validate the optional same-origin voice source before using it.
+  if (mode === "web") {
+    voiceRoot(); // Validate the optional same-origin voice source before using it.
+    await checkRuntimeRelease();
+  }
   gpu = await probeGpu();
   await refresh();
+  if (mode === "web") {
+    const repairIds = Object.keys(status).filter(id => status[id].runtimeMissing);
+    const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 3000));
+    // Do not await this here: main registers the release worker after startEngines.
+    // The same serial, cancellable queue repairs old packs without fetching their weights again.
+    later(() => {
+      for (const id of repairIds) {
+        const value = packStatus(id);
+        if (value.runtimeMissing && value.state === "partial" && !skipRuntimeRepair.has(id)) install(id);
+      }
+    }, { timeout: 10000 });
+  }
+}
+
+// The hosted release caches the speech and language runtimes on first use, not on install (see sw.js), so a
+// pack downloaded but never used online would not work offline. Fetch the runtime of every pack on the device.
+const ONNX = ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"].map((f) => "vendor/transformers/" + f);
+const TRANSFORMERS = ["vendor/transformers/transformers.min.js", ...ONNX];
+const RUNTIMES = {
+  llm: ["vendor/web-llm/index.js"],
+  "llm-cpu": ["index.js", "wllama.wasm", "compat/wllama.js", "compat/wllama.wasm"].map((f) => "vendor/wllama/" + f),
+  asr: TRANSFORMERS,
+  "help-asr": TRANSFORMERS,
+  voice: [...ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"],
+};
+const runtimeRoot = new URL("./", location.href);
+const skipRuntimeRepair = new Set();
+let runtimeRelease = null;
+const runtimeFiles = (id) => RUNTIMES[packById(id)?.kind] || [];
+
+async function checkRuntimeRelease(signal) {
+  try {
+    const response = await fetch(new URL("version.json", runtimeRoot).href, { cache: "no-store", signal });
+    if (response.status === 404) { runtimeRelease = null; return; } // raw app/, without an offline release
+    if (!response.ok) throw new Error(`Release metadata: HTTP ${response.status}`);
+    const data = await response.json();
+    if (typeof data.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(data.version)) throw new Error("Invalid release metadata");
+    runtimeRelease = { version: data.version };
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    runtimeRelease = { error: String(error.message || error) };
+  }
+}
+
+async function releaseRuntimeCache() {
+  if (!runtimeRelease?.version) return null;
+  // This is sw.js's verified snapshot, not the model-weight cache. Only a completed
+  // release has the marker; its entries are published after SHA-256 validation.
+  const name = `asound-shell-v2:${encodeURIComponent(runtimeRoot.href)}:${runtimeRelease.version}`;
+  const cache = await caches.open(name);
+  const marker = await cache.match(new URL("__asound_release__", runtimeRoot).href);
+  if (!marker || (await marker.json()).version !== runtimeRelease.version) return null;
+  return cache;
+}
+
+async function runtimeCached(cache, file) {
+  if (!cache) return false;
+  const hit = await cache.match(new URL(file, runtimeRoot).href);
+  if (hit?.body) hit.body.cancel().catch(() => {});
+  return !!hit;
+}
+
+async function runtimeComplete(id, cache) {
+  if (!runtimeRelease) return true;
+  for (const file of runtimeFiles(id)) if (!await runtimeCached(cache, file)) return false;
+  return true;
+}
+
+function waitForReleaseController(signal) {
+  const sw = navigator.serviceWorker;
+  const controlsRelease = () => sw?.controller?.scriptURL === new URL("sw.js", runtimeRoot).href;
+  signal.throwIfAborted();
+  if (controlsRelease()) return Promise.resolve();
+  if (!sw?.addEventListener) return Promise.reject(new Error("Offline storage is unavailable in this browser. Reopen the HTTPS website and retry."));
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      clearTimeout(timer);
+      sw.removeEventListener("controllerchange", changed);
+      signal.removeEventListener("abort", aborted);
+      if (error) reject(error); else resolve();
+    };
+    const changed = () => { if (controlsRelease()) finish(); };
+    const aborted = () => finish(signal.reason);
+    const timer = setTimeout(() => finish(new Error("The offline website is not ready. Reconnect, check for an update, and retry the download.")), 120000);
+    sw.addEventListener("controllerchange", changed);
+    signal.addEventListener("abort", aborted, { once: true });
+    changed();
+  });
+}
+
+async function ensureRuntimes(id, signal) {
+  if (runtimeRelease?.error) await checkRuntimeRelease(signal);
+  if (!runtimeRelease || !runtimeFiles(id).length) return;
+  if (runtimeRelease.error) throw new Error(runtimeRelease.error);
+  let cache = await releaseRuntimeCache();
+  if (await runtimeComplete(id, cache)) return;
+  await waitForReleaseController(signal);
+  cache = await releaseRuntimeCache();
+  for (const file of runtimeFiles(id)) {
+    signal.throwIfAborted();
+    if (await runtimeCached(cache, file)) continue;
+    // FetchEvent.request.signal is not linked to page cancellation in every browser.
+    // Address the worker which owns this request explicitly, even if control changes.
+    const controller = navigator.serviceWorker.controller;
+    const requestId = globalThis.crypto?.randomUUID?.()
+      || `runtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+    const cancelRuntime = () => {
+      try { controller?.postMessage?.({ type: "ASOUND_CANCEL_RUNTIME", requestId }); } catch {}
+    };
+    signal.addEventListener("abort", cancelRuntime, { once: true });
+    let response;
+    try {
+      signal.throwIfAborted();
+      response = await fetch(new URL(file, runtimeRoot).href, {
+        signal, headers: { "X-ASound-Runtime-Request": requestId },
+      });
+    } finally { signal.removeEventListener("abort", cancelRuntime); }
+    if (!response.ok) throw new Error(`Offline runtime: HTTP ${response.status} (${file})`);
+    if (response.body) await response.body.cancel();
+    signal.throwIfAborted();
+    // A successful uncontrolled HTTP response is not proof that offline use works.
+    // sw.js verifies and stores the complete body before returning its response.
+    cache = await releaseRuntimeCache();
+    if (!await runtimeCached(cache, file)) {
+      throw new Error("The runtime was not saved for this release. Check for an app update and retry.");
+    }
+  }
 }
 
 async function probeGpu() {
@@ -164,6 +294,13 @@ export async function checkConnections() {
   return probing;
 }
 
+// The configured or last-known source, without probing.
+function preferredSource() {
+  if (prefs.source !== "auto" && sourceList().includes(prefs.source)) return prefs.source;
+  if (sourceList().includes(catalog.defaultSource)) return catalog.defaultSource;
+  return sourceList()[0];
+}
+
 async function pickSource() {
   if (prefs.source !== "auto" && sourceList().includes(prefs.source)) return prefs.source;
   if (sourceList().includes(catalog.defaultSource)) return catalog.defaultSource;
@@ -211,7 +348,10 @@ export async function engineConfig(id, sourceName = null) {
     return { mode, base: voiceRoot(), cache: CACHE, canon: voiceCanon(), asr: undefined, llm: null };
   }
   // WebLLM caches by address, so a language model keeps the source it was downloaded from.
-  const source = sourceName || (p.kind === "llm" && llmSource(id)) || (await pickSource());
+  // An installed speech pack loads from the source-independent cache keys, so no network probe is needed at
+  // start-up (the probe fetches from every source and can take seconds on a slow phone connection).
+  const source = sourceName || (p.kind === "llm" && llmSource(id))
+    || (p.kind !== "llm" && installed(id) ? (resolved || preferredSource()) : await pickSource());
   const src = catalog.sources[source];
   return {
     mode, base: `${src.models}/`, cache: CACHE, canon: CANON,
@@ -245,12 +385,16 @@ export async function refresh() {
 async function webStatus() {
   let cache = null;
   try { cache = await caches.open(CACHE); } catch {}
+  let runtimes = null;
+  try { runtimes = await releaseRuntimeCache(); } catch {}
   for (const p of packList()) {
     const cur = status[p.id];
     if (cur && (cur.state === "downloading" || cur.state === "queued")) continue;
     if (p.kind === "llm") {
       const have = !!llmSource(p.id);
-      status[p.id] = { state: have ? "installed" : cur && cur.error ? "partial" : "absent", done: have ? p.size : 0, total: p.size, error: cur && cur.error };
+      const runtimeMissing = have && !await runtimeComplete(p.id, runtimes);
+      status[p.id] = { state: have && !runtimeMissing ? "installed" : have || cur?.error ? "partial" : "absent",
+        done: have ? p.size : 0, total: p.size, error: have && !runtimeMissing ? undefined : cur?.error, runtimeMissing };
       continue;
     }
     let have = 0, partial = 0;
@@ -258,7 +402,9 @@ async function webStatus() {
       if (await cache.match(canonKey(f))) have += f.size;
       else partial += await modelPartialBytes(canonKey(f), f).catch(() => 0);
     }
-    status[p.id] = { state: have >= p.size ? "installed" : have || partial || cur?.error ? "partial" : "absent", done: have + partial, total: p.size, error: cur && cur.error };
+    const runtimeMissing = have >= p.size && !await runtimeComplete(p.id, runtimes);
+    status[p.id] = { state: have >= p.size && !runtimeMissing ? "installed" : have || partial || cur?.error ? "partial" : "absent",
+      done: have + partial, total: p.size, error: have >= p.size && !runtimeMissing ? undefined : cur?.error, runtimeMissing };
   }
   try { const est = await navigator.storage.estimate(); free = est.quota - est.usage; } catch { free = null; }
 }
@@ -277,6 +423,8 @@ function setLlmSource(id, source) {
 
 export async function install(id) {
   if (!packById(id)) return;
+  // A manual attempt (including a failed one) must not be restarted by a late idle callback.
+  skipRuntimeRepair.add(id);
   if (mode === "desktop") {
     await post("install", { id, source: prefs.source });
     return;
@@ -291,6 +439,7 @@ export async function install(id) {
 
 export async function cancel(id) {
   if (mode === "desktop") { await post("cancel", { id }); return; }
+  skipRuntimeRepair.add(id);
   const at = webQueue.indexOf(id);
   if (at >= 0) { webQueue.splice(at, 1); delete status[id]; }
   if (webCurrent && webCurrent.id === id) {
@@ -341,6 +490,7 @@ async function pumpWeb() {
   if (webCurrent || !webQueue.length) return;
   const id = webQueue.shift();
   const p = packById(id);
+  const repairRuntime = !!packStatus(id).runtimeMissing;
   const ctl = new AbortController();
   let finish;
   webCurrent = { id, ctl, finished: new Promise((resolve) => { finish = resolve; }) };
@@ -356,14 +506,17 @@ async function pumpWeb() {
   try {
     try { await navigator.storage.persist(); } catch {}
     if (p.kind === "llm") {
-      const source = await pickSource();
-      ctl.signal.throwIfAborted();
-      const cfg = await engineConfig(id, source);
-      await window.ASoundAI.download(cfg.llm, (frac) => set(Math.round(frac * p.size)), ctl.signal);
-      ctl.signal.throwIfAborted();
-      setLlmSource(id, source);
+      if (llmSource(id)) set(p.size);
+      else {
+        const source = await pickSource();
+        ctl.signal.throwIfAborted();
+        const cfg = await engineConfig(id, source);
+        await window.ASoundAI.download(cfg.llm, (frac) => set(Math.round(frac * p.size)), ctl.signal);
+        ctl.signal.throwIfAborted();
+        setLlmSource(id, source);
+      }
     } else {
-      const source = p.id === "voice" && hostedVoice() ? null : await pickSource();
+      const source = p.id === "voice" && hostedVoice() ? null : (repairRuntime ? preferredSource() : await pickSource());
       ctl.signal.throwIfAborted();
       const cache = await caches.open(CACHE);
       let done = 0;
@@ -377,6 +530,8 @@ async function pumpWeb() {
         set(done);
       }
     }
+    ctl.signal.throwIfAborted();
+    await ensureRuntimes(id, ctl.signal);
     ctl.signal.throwIfAborted();
     delete status[id];
   } catch (e) {
