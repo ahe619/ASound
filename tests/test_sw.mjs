@@ -101,6 +101,25 @@ test("unchanged assets are reused from verified snapshots", async () => {
   assert.equal(next.skipped, 0);
 });
 
+test("on-demand assets are fetched on first use, verified, and kept for the next release", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "big runtime" };
+  const manifest = assets(files).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const old = worker("one", files, new CacheStorage(), manifest);
+  await old.dispatch("install");
+  assert.deepEqual(old.fetched, ["index.html"]);
+  old.files["vendor/runtime.wasm"] = "tampered runtime";
+  assert.equal((await old.get("vendor/runtime.wasm")).status, 503);
+  old.files["vendor/runtime.wasm"] = "big runtime";
+  assert.equal(await (await old.get("vendor/runtime.wasm")).text(), "big runtime");
+  const next = worker("two", { ...files, "index.html": "page two" }, old.storage,
+    assets({ ...files, "index.html": "page two" }).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a)));
+  await next.dispatch("install");
+  assert.deepEqual(next.fetched, ["index.html"]);
+  next.fetched = [];
+  assert.equal(await (await next.get("vendor/runtime.wasm")).text(), "big runtime");
+  assert.deepEqual(next.fetched, []);
+});
+
 test("activation requires one requesting app window and ignores other projects", async () => {
   const w = worker("two", { "index.html": "new" });
   await w.dispatch("install");

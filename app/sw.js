@@ -58,6 +58,9 @@ async function installRelease() {
         const hit = await old.cache.match(url);
         if (hit && await digest(hit) === asset.sha256) { response = hit; break; }
       }
+      // On-demand assets (speech runtimes, word pictures) are not downloaded up front: a first visit on a phone
+      // should not fetch tens of megabytes it may never use. The fetch handler caches them, verified, on first use.
+      if (!response && asset.lazy) continue;
       if (!response) {
         response = await fetch(new Request(url, { cache: "no-store", credentials: "same-origin" }));
         if (!response.ok || response.type === "opaque" || await digest(response) !== asset.sha256) {

@@ -52,6 +52,11 @@ class WebBuildTests(unittest.TestCase):
         for item in assets:
             self.assertEqual(item["sha256"], hashlib.sha256((self.out / item["url"]).read_bytes()).hexdigest())
         self.assertEqual(json.loads((self.out / "version.json").read_text())["version"], result["version"])
+        # Runtimes are cached on first use; the app shell and word lists are installed up front.
+        lazy = {item["url"] for item in assets if item.get("lazy")}
+        self.assertIn("vendor/engine.wasm", lazy)
+        self.assertNotIn("js/main.js", lazy)
+        self.assertNotIn("vocabulary/words.json", lazy)
 
     def test_reproducible_and_changes_version_for_asset_or_worker_edits(self):
         first = build(self.app, self.out, "0.2.0")["version"]

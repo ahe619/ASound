@@ -57,7 +57,16 @@ async function boot() {
     if ((what === "profile" || what === "placements") && state.tab === "me") renderMe();
   });
 
-  await startEngines(renderModels);
+  // A hosted (https) web visit lands on word study, which needs no models: show it now and look at the model
+  // packs in the background. The desktop app (local http server) decides between setup and practice first.
+  const hosted = location.protocol === "https:" && !inAppShell;
+  const engines = startEngines(renderModels);
+  if (hosted) {
+    const hash = location.hash.slice(1);
+    setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
+    initNavigation();
+  }
+  await engines;
   // Only hosted web releases update themselves. Bundled desktop/mobile assets use package updates.
   initUpdates({
     enabled: packMode() === "web" && !inAppShell,
@@ -75,11 +84,20 @@ async function boot() {
     if (["accent", "vocab", "me"].includes(hash)) setTab(hash);
     show();
     warmUp();
-    if (window.ASoundMic && !deviceInfo().mobile) window.ASoundMic.preload();
+    // Load speech recognition once the first screen is up, not in the middle of it.
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    if (window.ASoundMic && !deviceInfo().mobile) idle(() => window.ASoundMic.preload(), { timeout: 4000 });
   };
   // Web visitors can study words and use available system voices immediately.
   // Optional conversation resources remain accessible from the settings screen.
-  if (ready()) start();
+  if (hosted) {
+    if (ready()) {
+      resumeIfRecent(); // a conversation from the last half hour comes back, as before
+      const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+      idle(() => warmUp(), { timeout: 4000 });
+    }
+  }
+  else if (ready()) start();
   else if (packMode() === "web") {
     const hash = location.hash.slice(1);
     setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
@@ -89,7 +107,7 @@ async function boot() {
     // Text vocabulary study does not require downloading or starting any AI model.
     if (location.hash.slice(1) === "vocab") setTab("vocab");
   }
-  initNavigation();
+  if (!hosted) initNavigation();
 }
 
 // Installed as a web app (https): keep the app itself available offline.
