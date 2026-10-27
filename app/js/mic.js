@@ -14,6 +14,19 @@ function micErrorText(e) {
   return t("mic.err.generic");
 }
 
+// Speech needs the listening model (a downloadable pack). Without it, say so and open the downloads.
+function needModel() {
+  if (!window.ASoundMic.hasModel || window.ASoundMic.hasModel()) return false;
+  toast(t("mic.err.noModel"));
+  import("./models.js").then((m) => m.showModels()).catch(() => {});
+  return true;
+}
+function asrErrorText(e) {
+  if (e && e.code === "no_model") return t("mic.err.noModel");
+  if (window.ASoundMic.status().asr === "error") return t("mic.err.asrLoad");
+  return t("mic.err.asr");
+}
+
 let current = null; // one button owns capture, permission waiting, or transcription at a time
 function cancelCurrent() {
   const control = current;
@@ -48,6 +61,7 @@ export function micButton({ onText, onAudio, big = false, label, lang = "" } = {
     if (state === "busy") return;
     if (state === "starting") { cancelCurrent(); return; }
     if (state === "idle") {
+      if (!lang && needModel()) return;
       cancelCurrent();
       stopSpeaking();
       const id = ++operation;
@@ -84,7 +98,7 @@ export function micButton({ onText, onAudio, big = false, label, lang = "" } = {
     } catch (e) {
       if (id === operation && !wasCancelled(e)) {
         console.warn(e);
-        toast(t("mic.err.asr"));
+        toast(asrErrorText(e));
       }
     } finally {
       if (id === operation) control.reset();
@@ -102,6 +116,7 @@ export const handsFree = {
   // endMs: how long a pause ends a turn (learners need longer pauses than native speakers)
   async start({ onText, onState, onLevel, endMs }) {
     if (!micSupported()) { toast(t("mic.err.unsupported")); return false; }
+    if (needModel()) return false;
     this.stop();
     cancelCurrent();
     const run = ++handsFreeRun;

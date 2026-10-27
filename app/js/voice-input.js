@@ -99,14 +99,28 @@
   const clearFrames = () => Object.assign(mic, { frames: [], preroll: [], speaking: false, above: 0, below: 0 });
   const notifyCancel = (handlers) => { try { if (handlers && handlers.onCancel) handlers.onCancel(); } catch {} };
 
+  // The context runs at the device's own rate (44.1/48 kHz, 8 kHz on some headsets); the tap converts to 16 kHz:
+  // each output sample is the average of the input samples in its step (a simple low-pass), repeated when the
+  // device rate is lower.
   const WORKLET = `
     class Tap extends AudioWorkletProcessor {
-      constructor() { super(); this.buf = new Float32Array(${FRAME}); this.n = 0; }
+      constructor() {
+        super();
+        this.buf = new Float32Array(${FRAME}); this.n = 0;
+        this.step = sampleRate / ${RATE}; this.pos = 0; this.acc = 0; this.cnt = 0;
+      }
       process(inputs) {
         const ch = inputs[0] && inputs[0][0];
         if (ch) for (let i = 0; i < ch.length; i++) {
-          this.buf[this.n++] = ch[i];
-          if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+          this.acc += ch[i]; this.cnt++; this.pos += 1;
+          if (this.pos < this.step) continue;
+          const v = this.acc / this.cnt;
+          this.acc = 0; this.cnt = 0;
+          while (this.pos >= this.step) {
+            this.pos -= this.step;
+            this.buf[this.n++] = v;
+            if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+          }
         }
         return true;
       }
@@ -120,12 +134,16 @@
     const resources = { stream, ctx, src, node };
     opening.add(resources);
     try {
+      // Create and wake the audio context first, still inside the tap that started recording: Safari keeps a context
+      // made after the permission prompt suspended (silent recordings). Keep the device's own rate: Firefox cannot
+      // connect a microphone to a context with a different rate.
+      resources.ctx = ctx = new AudioContext();
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
       // Keep pending resources local: a late permission result must not overwrite a newer capture.
       resources.stream = stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       requireCapture(id);
-      resources.ctx = ctx = new AudioContext({ sampleRate: RATE });
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
       try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
       requireCapture(id);
@@ -254,6 +272,7 @@
     // the multilingual recognizer: transcribeNative(f32, "zh") for speech in the learner's own language
     configureHelp: (cfg) => help.configure(cfg),
     hasNative: () => !!help.config,
+    hasModel: () => !!asr.config, // false until a speech recognition pack is installed
     transcribeNative: (audio, lang) => help.transcribe(audio, lang),
     preload: () => loadASR().catch(() => {}),
     record: (handlers = {}) => startCapture(handlers, "recording"),

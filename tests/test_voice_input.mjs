@@ -98,7 +98,8 @@ test("close stops a late permission result without reactivating capture", async 
   await rejected;
   assert.equal(stream.track.stopped, true);
   assert.equal(f.mic.status().mic, "off");
-  assert.equal(f.contexts.length, 0);
+  // The context is made inside the tap (Safari), before permission; cancelling must close it.
+  assert.ok(f.contexts.every((c) => c.closed));
 });
 
 test("cancel immediately releases tracks while the worklet is still loading", async () => {

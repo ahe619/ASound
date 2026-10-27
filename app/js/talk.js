@@ -362,9 +362,31 @@ export function startProfile() {
   beginSession(newSession({ kind: "profile", scenario: "chat", level: prefs.level }));
 }
 
+// Scripted first lines for the built-in scenes, used with the small phone models (their own openers often go off track).
+const OPENERS = {
+  chat: ["Hey, I don't think we've met. I'm Alex. What brings you to this event?", "Hi there! I'm Alex. How's your week been so far?"],
+  office: ["Hi, come on in! What can I help you with today?", "Hey, good to see you. What did you want to talk about?"],
+  group: ["Okay, we need to split up the work for this project. Which part do you want to take?", "Hey! The deadline's next Friday. Where are you at with your part?"],
+  cafe: ["Hi, welcome in! What can I get started for you today?", "Hey there! What are you in the mood for today?"],
+  interview: ["Thanks for coming in today. So, tell me a little about yourself.", "Nice to meet you. To start, what made you apply for this internship?"],
+  doctor: ["Hi, I'm the nurse on duty today. What brings you in?", "Hello, have a seat. So, what's been going on?"],
+  exam: ["Good morning. Could you tell me your full name, please?", "Let's begin. Could you tell me where you're from?"],
+  ita: ["Hi! So what are we learning about in today's class?", "Hey, I'm in your section. What concept are you teaching us today?"],
+};
+
 function beginSession(s) {
   stopSpeaking();
   state.session = s;
+  if (s.kind === "talk" && !s.turns.length && OPENERS[s.scenario] && P.smallModel()) {
+    const turn = { role: "assistant", text: pick(OPENERS[s.scenario]) };
+    s.turns.push(turn);
+    persistLive();
+    renderChat();
+    setTalkView("chat");
+    const el = thread().lastElementChild;
+    if (el) afterReply(turn, el);
+    return;
+  }
   persistLive();
   renderChat();
   setTalkView("chat");
@@ -516,11 +538,24 @@ function renderTurn(turn) {
 const TYPES = ["grammar", "word", "natural", "pronunciation"];
 function normFeedback(raw, said) {
   const o = isObj(raw) ? raw : {};
+  // A "mistake" whose wrong words the learner never said is the model making things up: drop it.
+  const saidKey = ` ${tokens(said).map(normTok).filter(Boolean).join(" ")} `;
+  const inSaid = (w) => !w || w.split(/[,;/]/).some((part) => {
+    const key = tokens(part).map(normTok).filter(Boolean).join(" ");
+    return key && saidKey.includes(` ${key} `);
+  });
   const issues = arr(o.issues).filter(isObj)
     .map((x) => ({ type: TYPES.includes(str(x.type)) ? str(x.type) : "grammar", wrong: str(x.wrong), right: str(x.right), explain: str(x.explain) }))
-    .filter((x) => (x.explain || x.right) && !(x.wrong && x.right && looseEqual(x.wrong, x.right)))
+    .filter((x) => (x.explain || x.right) && !(x.wrong && x.right && looseEqual(x.wrong, x.right)) && inSaid(x.wrong))
     .slice(0, 4);
-  const better = arr(o.better).filter(isObj).map((x) => ({ en: str(x.en), meaning: str(x.meaning || x.zh) })).filter((x) => x.en && !sameWords(x.en, said)).slice(0, 2);
+  // A "more natural" version that only swaps one word is noise (small models do this often).
+  const saidWords = tokens(said).map(normTok).filter(Boolean);
+  const barelyDifferent = (en) => {
+    const words = tokens(en).map(normTok).filter(Boolean);
+    return Math.abs(words.length - saidWords.length) <= 1 && words.filter((w, i) => w !== saidWords[i]).length <= 1;
+  };
+  const better = arr(o.better).filter(isObj).map((x) => ({ en: str(x.en), meaning: str(x.meaning || x.zh) }))
+    .filter((x) => x.en && !sameWords(x.en, said) && !barelyDifferent(x.en)).slice(0, 2);
   let corrected = str(o.corrected) || said;
   if (looseEqual(corrected, said)) corrected = said;
   const ok = issues.length === 0 && (o.ok !== false || sameWords(corrected, said));
@@ -861,14 +896,17 @@ async function toggleLive() {
   if (ok) {
     prefs.handsFree = true;
     savePrefs();
-    if (state.busy || isSpeaking()) handsFree.pause();
+    // Turned on while the partner is still talking or thinking: wait, and say so (the check below resumes after).
+    if (state.busy || isSpeaking()) { handsFree.pause(); setLive(isSpeaking() ? "speaking" : "thinking"); }
     paintLive();
   }
 }
-// If speech was stopped by hand, hands-free would stay paused; pick it up again.
+// Hands-free must never sit paused while nothing else is going on (speech stopped by hand, or turned on mid-reply).
 setInterval(() => {
-  if (chatVisible() && handsFree.on && state.session && !state.busy && !isSpeaking() && (liveState === "speaking" || liveState === "thinking")) {
-    setLive("listening");
+  if (!chatVisible() || !handsFree.on || !state.session || state.busy || isSpeaking()) return;
+  const paused = window.ASoundMic && window.ASoundMic.status().mic === "paused";
+  if (liveState === "speaking" || liveState === "thinking" || (paused && (liveState === "listening" || liveState === "holding"))) {
+    setLive(held ? "holding" : "listening");
     handsFree.resume();
   }
 }, 1500);
@@ -934,7 +972,7 @@ async function summarize(doc) {
   try {
     const raw = await askJSON(P.summaryPrompt(doc), { signal: ctl.signal });
     if (state.summaryOf !== doc) return;
-    doc.summary = normSummary(raw);
+    doc.summary = normSummary(raw, doc);
     closeSession();
     sessions.save(doc);
     renderSummary(doc);
@@ -957,11 +995,15 @@ function backToChat() {
   setTalkView("chat");
 }
 
-function normSummary(raw) {
+function normSummary(raw, doc = null) {
   const o = isObj(raw) ? raw : {};
+  // Small models sometimes praise the learner for the partner's lines: drop strengths that quote one.
+  const partner = doc ? arr(doc.turns).filter((x) => x.role === "assistant").map((x) => tokens(x.text).map(normTok).filter(Boolean).join(" ")) : [];
+  const quotesPartner = (s) => (String(s).match(/['"\u2018\u201c]([^'"\u2019\u201d]{12,})['"\u2019\u201d]/g) || [])
+    .some((m) => { const key = tokens(m).map(normTok).filter(Boolean).join(" "); return key && partner.some((p) => p.includes(key)); });
   return {
     overall: str(o.overall),
-    strengths: arr(o.strengths).map(str).filter(Boolean).slice(0, 4),
+    strengths: arr(o.strengths).map(str).filter((s) => s && !quotesPartner(s)).slice(0, 4),
     focus: arr(o.focus).filter(isObj).map((x) => ({ wrong: str(x.wrong), right: str(x.right), explain: str(x.explain) }))
       .filter((x) => (x.right || x.explain) && !(x.wrong && x.right && looseEqual(x.wrong, x.right))).slice(0, 5),
     expressions: arr(o.expressions).filter(isObj).map((x) => ({ term: str(x.term), ipa: str(x.ipa), meaning: str(x.meaning || x.zh), example: str(x.example) })).filter((x) => x.term).slice(0, 10),

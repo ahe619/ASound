@@ -444,5 +444,8 @@
   "native.send": "Obtenir l'anglais",
   "native.needPack": "Pour le dire à voix haute, télécharge « Aide dans ta langue » dans Modèles. Tu peux déjà l'écrire.",
   "modes.title": "D'autres façons de pratiquer",
-  "modes.failed": "Ce mode d'entraînement n'a pas pu démarrer."
+  "modes.failed": "Ce mode d'entraînement n'a pas pu démarrer.",
+  "mic.err.noModel": "La voix nécessite le modèle d’écoute (environ 32 Mo). Ouverture des téléchargements…",
+  "mic.err.asrLoad": "Le modèle d’écoute n’a pas pu se charger. Téléchargez-le à nouveau dans Modèles et téléchargements.",
+  "check.fallback": "Entraînez-vous sur les mots non reconnus : écoutez-les, puis relisez le paragraphe."
 }

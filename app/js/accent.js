@@ -11,6 +11,7 @@ import { micButton } from "./mic.js";
 import { checks, drillStore } from "./store.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
 import { modeCards } from "./modes.js";
+import { DRILL_BANK } from "./drill-bank.js";
 
 let view = "home";        // home | drill | check
 let drill = null;         // {drillId, level, items, idx}
@@ -68,13 +69,27 @@ async function startDrill() {
   const d = drillById(prefs.drill), level = prefs.level;
   fill(root(), h("div", { class: "loading-card" }, h("p", null, t("accent.writing", { name: t(`drill.${d.id}.name`) }), thinkingDots())));
   scrollTop();
+  let items = [];
   try {
     const raw = await askJSON(P.drillPrompt(d, level), { cache: false });
-    const items = arr(raw && raw.sentences).filter(isObj).map((x) => ({
+    // Keep real sentences only: not the prompt's own example, 5 to 20 words.
+    const words = (s) => s.split(/\s+/).filter(Boolean).length;
+    items = arr(raw && raw.sentences).filter(isObj).map((x) => ({
       text: str(x.text), meaning: str(x.meaning), sounds: str(x.sounds), ipa: str(x.ipa),
       tips: arr(x.tips).filter(isObj).map((tp) => ({ part: str(tp.part), tip: str(tp.tip) })).filter((tp) => tp.tip).slice(0, 3),
       attempt: null,
-    })).filter((x) => x.text).slice(0, 8);
+    })).filter((x) => x.text && !/gonna grab a cup/i.test(x.text) && words(x.text) >= 5 && words(x.text) <= 20).slice(0, 8);
+  } catch (e) {
+    if (e && e.code === "cancelled") { renderHome(); return; }
+    console.warn("drill sentences", e);
+  }
+  // Too few good sentences (common with the small models), or none: top up from the hand-written bank.
+  if (items.length < 3) {
+    const have = new Set(items.map((x) => x.text.toLowerCase()));
+    const extra = [...(DRILL_BANK[d.id] || [])].filter((s) => !have.has(s.toLowerCase())).sort(() => Math.random() - 0.5);
+    items = [...items, ...extra.slice(0, 5 - items.length).map((text) => ({ text, meaning: "", sounds: "", ipa: "", tips: [], attempt: null }))];
+  }
+  try {
     if (!items.length) throw { code: "invalid_json" };
     drill = { drillId: d.id, level, items, idx: 0 };
     drillStore.set(drill);
@@ -245,7 +260,21 @@ function paintCheckResult(box) {
     check.saved = true;
   }
   if (a.report) paintReport(reportBox, a.report);
-  else requestReport(reportBox, m.missed);
+  else if (m.missed.length) requestReport(reportBox, m.missed); // nothing missed: nothing to diagnose
+}
+
+// Which drills fit the words the recognizer missed, by spelling alone (used when the model's report fails).
+function guessDrills(missed) {
+  const found = [];
+  const add = (id) => { if (!found.includes(id)) found.push(id); };
+  for (const raw of missed) {
+    const w = String(raw).toLowerCase();
+    if (/th/.test(w)) add("th");
+    if (/[aeiou][td]+(er|y|le|ing|ed|a|o)\b/.test(w)) add("flap");
+    if (/[aeiou]r/.test(w)) add("r");
+    if (/(l|ed|ld|lt)$/.test(w)) add("l");
+  }
+  return found.slice(0, 2);
 }
 
 async function requestReport(box, missed) {
@@ -261,7 +290,10 @@ async function requestReport(box, missed) {
     };
     if (box.isConnected) paintReport(box, a.report);
   } catch (e) {
-    if (box.isConnected) fill(box, h("p", { class: "hint-line" }, aiErrorText(e)), h("button", { type: "button", class: "mini", onclick: () => requestReport(box, missed) }, t("chat.retry")));
+    if (e && e.code === "cancelled") return;
+    // No usable report (small models often fail here): point to drills for the missed words instead of an error.
+    a.report = { summary: t("check.fallback"), problems: [], drills: guessDrills(missed), encourage: "" };
+    if (box.isConnected) paintReport(box, a.report);
   }
 }
 
