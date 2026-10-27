@@ -63,46 +63,61 @@ function renderHome() {
 
 /* ---------- drills ---------- */
 
-async function startDrill() {
+// A drill starts at once with hand-written sentences; sentences the local model writes for the learner's level
+// are added behind them when they arrive (on a phone that can take a while), so nobody waits on a spinner.
+let drillCtl = null;
+function bankItems(d, count, skip = new Set()) {
+  return [...(DRILL_BANK[d.id] || [])].filter((s) => !skip.has(s.toLowerCase())).sort(() => Math.random() - 0.5)
+    .slice(0, count).map((text) => ({ text, meaning: "", sounds: "", ipa: "", tips: [], attempt: null }));
+}
+
+function startDrill() {
   unlockAudio();
   stopSpeaking();
   const d = drillById(prefs.drill), level = prefs.level;
-  fill(root(), h("div", { class: "loading-card" }, h("p", null, t("accent.writing", { name: t(`drill.${d.id}.name`) }), thinkingDots())));
+  if (drillCtl) drillCtl.abort();
+  const items = bankItems(d, 3);
+  if (!items.length) { toast(aiErrorText({ code: "invalid_json" })); renderHome(); return; }
+  const mine = { drillId: d.id, level, items, idx: 0 };
+  drill = mine;
+  drillStore.set(drill);
+  view = "drill";
+  renderDrill();
   scrollTop();
-  let items = [];
-  try {
-    const raw = await askJSON(P.drillPrompt(d, level), { cache: false });
-    // Keep real sentences only: not the prompt's own example, 5 to 20 words.
-    const words = (s) => s.split(/\s+/).filter(Boolean).length;
-    items = arr(raw && raw.sentences).filter(isObj).map((x) => ({
+  const ctl = new AbortController();
+  drillCtl = ctl;
+  askJSON(P.drillPrompt(d, level), { cache: false, signal: ctl.signal }).then((raw) => {
+    if (drill !== mine || ctl.signal.aborted) return;
+    // Keep real sentences only: not the prompt's own example, 5 to 20 words, not already in the drill.
+    const words = (x) => x.split(/\s+/).filter(Boolean).length;
+    const have = new Set(mine.items.map((x) => x.text.toLowerCase()));
+    const extra = arr(raw && raw.sentences).filter(isObj).map((x) => ({
       text: str(x.text), meaning: str(x.meaning), sounds: str(x.sounds), ipa: str(x.ipa),
       tips: arr(x.tips).filter(isObj).map((tp) => ({ part: str(tp.part), tip: str(tp.tip) })).filter((tp) => tp.tip).slice(0, 3),
       attempt: null,
-    })).filter((x) => x.text && !/gonna grab a cup/i.test(x.text) && words(x.text) >= 5 && words(x.text) <= 20).slice(0, 8);
-  } catch (e) {
-    if (e && e.code === "cancelled") { renderHome(); return; }
-    console.warn("drill sentences", e);
-  }
-  // Too few good sentences (common with the small models), or none: top up from the hand-written bank.
-  if (items.length < 3) {
-    const have = new Set(items.map((x) => x.text.toLowerCase()));
-    const extra = [...(DRILL_BANK[d.id] || [])].filter((s) => !have.has(s.toLowerCase())).sort(() => Math.random() - 0.5);
-    items = [...items, ...extra.slice(0, 5 - items.length).map((text) => ({ text, meaning: "", sounds: "", ipa: "", tips: [], attempt: null }))];
-  }
-  try {
-    if (!items.length) throw { code: "invalid_json" };
-    drill = { drillId: d.id, level, items, idx: 0 };
-    drillStore.set(drill);
-    view = "drill";
-    renderDrill();
-  } catch (e) {
-    toast(aiErrorText(e));
-    renderHome();
-  }
+    })).filter((x) => {
+      const key = x.text.toLowerCase();
+      // drop copies of the prompt's own wording (the small models echo the example lists), and repeats
+      const copied = /gonna grab a cup/i.test(x.text) || d.focus.toLowerCase().includes(key.replace(/[.!?]+$/, ""));
+      if (!x.text || copied || words(x.text) < 5 || words(x.text) > 20 || have.has(key)) return false;
+      have.add(key);
+      return true;
+    }).slice(0, 5);
+    // Too few from the model (common with the small ones): top up from the bank so a drill has about five.
+    const more = extra.length >= 2 ? extra : [...extra, ...bankItems(d, 2 - extra.length, new Set([...have, ...extra.map((x) => x.text.toLowerCase())]))];
+    mine.items.push(...more);
+    drillStore.set(mine);
+    const progress = root().querySelector(".progress");
+    if (progress && view === "drill") progress.textContent = t("accent.progress", { n: mine.idx + 1, total: mine.items.length });
+  }).catch((e) => {
+    if (!(e && e.code === "cancelled")) console.warn("drill sentences", e);
+    if (drill === mine && !ctl.signal.aborted) { mine.items.push(...bankItems(d, 2, new Set(mine.items.map((x) => x.text.toLowerCase())))); drillStore.set(mine); }
+  }).finally(() => { if (drillCtl === ctl) drillCtl = null; });
 }
 
 function leaveDrill() {
   stopSpeaking();
+  if (drillCtl) { drillCtl.abort(); drillCtl = null; }
   drill = null;
   drillStore.clear();
   renderHome();
