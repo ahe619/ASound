@@ -146,6 +146,23 @@ test("multiple choice keeps one correct definition and up to three unique real d
   assert.equal(meaningChoices(target, pool.slice(0, 3)).length, 2);
 });
 
+test("distractors favour look-alike words and the same part of speech", () => {
+  const target = { id: "adapt", term: "adapt", meaning: "vt. 使适应" };
+  const pool = [target,
+    { id: "adopt", term: "adopt", meaning: "vt. 采纳" },
+    { id: "adept", term: "adept", meaning: "adj. 熟练的" },
+    { id: "run", term: "run", meaning: "vi. 跑" },
+    { id: "table", term: "table", meaning: "n. 桌子" },
+    { id: "happy", term: "happy", meaning: "adj. 快乐的" },
+    { id: "apple", term: "apple", meaning: "n. 苹果" }];
+  for (let seed = 0; seed < 5; seed++) {
+    let n = seed;
+    const result = ids(meaningChoices(target, pool, () => ((n = (n * 9301 + 49297) % 233280) / 233280)));
+    assert.ok(result.includes("adopt") && result.includes("adept"), result.join());
+    assert.ok(result.includes("run"), "a verb is preferred over nouns and adjectives: " + result.join());
+  }
+});
+
 test("spelling accepts case and boundary whitespace, without forgiving wrong letters or punctuation", () => {
   for (const answer of ["bridge", "BRIDGE", " BrIdGe  ", "\tbridge\n"]) assert.equal(spellingCorrect(answer, "bridge"), true);
   for (const answer of ["", "bridg", "bridges", "br idge", "bridge!", "bridge road"]) assert.equal(spellingCorrect(answer, "bridge"), false);

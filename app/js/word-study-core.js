@@ -85,15 +85,54 @@ export function meaningChoices(word, pool, rng = Math.random) {
     }
     return rows;
   };
+  // Options that can be ruled out by their form teach nothing. Prefer up to two look-alike words (adapt: adopt,
+  // adept), then words of the same part of speech, then any.
+  const term = String(word.term || "").toLowerCase(), pos = partOfSpeech(word.meaning);
+  const near = Math.max(1, Math.floor(term.length / 4));
+  const lookAlike = [], samePos = [], rest = [];
+  for (const candidate of shuffle(shuffled)) {
+    if (!meaningKey(candidate.meaning) || candidate.id === word.id) continue;
+    const other = String(candidate.term || "").toLowerCase();
+    if (term.length >= 4 && other !== term && editDistance(term, other, near) <= near) lookAlike.push(candidate);
+    else (pos && partOfSpeech(candidate.meaning) === pos ? samePos : rest).push(candidate);
+  }
   const selected = [word];
   const definitions = new Set([meaningKey(word.meaning)]);
-  for (const candidate of shuffle(shuffled)) {
-    const key = meaningKey(candidate.meaning);
-    if (!key || candidate.id === word.id || definitions.has(key)) continue;
-    definitions.add(key); selected.push(candidate);
-    if (selected.length === 4) break;
-  }
+  const take = (rows, limit) => {
+    for (const candidate of rows) {
+      if (selected.length >= limit) return;
+      const key = meaningKey(candidate.meaning);
+      if (definitions.has(key)) continue;
+      definitions.add(key); selected.push(candidate);
+    }
+  };
+  take(lookAlike, 3);
+  take(samePos, 4);
+  take(rest, 4);
   return shuffle(selected);
+}
+
+// "vt. ..." -> "v"; the first part of speech in a dictionary definition.
+const partOfSpeech = meaning => {
+  const tag = (String(meaning || "").match(/^\s*([a-z]+)\./) || [])[1] || "";
+  return /^v[ti]?$/.test(tag) ? "v" : tag;
+};
+
+// Levenshtein distance, stopping early once it is certainly above `limit`.
+function editDistance(a, b, limit) {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let row = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (next[j] < best) best = next[j];
+    }
+    if (best > limit) return limit + 1;
+    row = next;
+  }
+  return row[b.length];
 }
 
 export function filterWords(words, options = {}) {
