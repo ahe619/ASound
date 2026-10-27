@@ -45,6 +45,32 @@ export async function initPacks() {
   if (mode === "web") voiceRoot(); // Validate the optional same-origin voice source before using it.
   gpu = await probeGpu();
   await refresh();
+  if (mode === "web") {
+    const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 3000));
+    later(() => warmRuntimes(Object.keys(status).filter(installed)), { timeout: 10000 });
+  }
+}
+
+// The hosted release caches the speech and language runtimes on first use, not on install (see sw.js), so a
+// pack downloaded but never used online would not work offline. Fetch the runtime of every pack on the device.
+const TRANSFORMERS = ["transformers.min.js", "ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"].map((f) => "vendor/transformers/" + f);
+const RUNTIMES = {
+  llm: ["vendor/web-llm/index.js"],
+  "llm-cpu": ["index.js", "wllama.wasm", "compat/wllama.js", "compat/wllama.wasm"].map((f) => "vendor/wllama/" + f),
+  asr: TRANSFORMERS,
+  "help-asr": TRANSFORMERS,
+  voice: [...TRANSFORMERS, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"],
+};
+let warming = Promise.resolve();
+function warmRuntimes(ids) {
+  if (!(navigator.serviceWorker && navigator.serviceWorker.controller)) return; // not the hosted release
+  const urls = [...new Set(ids.flatMap((id) => RUNTIMES[(packById(id) || {}).kind] || []))];
+  // One at a time, behind any earlier warm-up: the service worker verifies each file and keeps it.
+  warming = warming.then(async () => {
+    for (const url of urls) {
+      try { const r = await fetch(url); if (r.body) await r.body.cancel(); } catch {}
+    }
+  });
 }
 
 async function probeGpu() {
@@ -389,6 +415,7 @@ async function pumpWeb() {
     }
     ctl.signal.throwIfAborted();
     delete status[id];
+    warmRuntimes([id]);
   } catch (e) {
     status[id] = { ...packStatus(id), state: "partial", error: ctl.signal.aborted ? undefined : String((e && e.message) || e).slice(0, 160) };
     if (!ctl.signal.aborted) console.warn("download failed", id, e);

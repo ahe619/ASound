@@ -33,12 +33,23 @@ export const spellingCorrect = (answer, term) => !!normalizeSpelling(answer) && 
 // "Say it": the recognizer's transcript must contain the word (or the phrase), allowing simple inflections of the
 // last word (books, watched, making...). Speech recognition hears "ice-cream" or "ice cream" alike.
 const sayWords = value => normalizeSpelling(value).replace(/[\u2019']/g, "").split(/[^a-z0-9]+/).filter(Boolean);
-function inflected(heard, base) {
-  if (heard === base) return true;
-  const stem = base.endsWith("e") ? base.slice(0, -1) : base;
-  return [base + "s", base + "es", base + "ed", base + "d", base + "ing", stem + "ing", stem + "ed",
-    base.replace(/y$/, "ies"), base.replace(/y$/, "ied")].includes(heard);
+// Regular English spelling rules only, so a different word is not taken for a form of the target ("scar" is not
+// "scared", "be" is not "bed"). Words under three letters must be said as they are.
+function inflections(base) {
+  if (base.length < 3 || !/^[a-z]+$/.test(base)) return [];
+  const forms = [];
+  if (/[^aeiou]y$/.test(base)) {
+    const y = base.slice(0, -1);
+    return [y + "ies", y + "ied", base + "ing"];
+  }
+  forms.push(/(s|x|z|ch|sh|o)$/.test(base) ? base + "es" : base + "s");
+  if (base.endsWith("ie")) return forms.concat(base + "d", base.slice(0, -2) + "ying");
+  if (base.endsWith("e")) return forms.concat(base + "d", /(ee|ye|oe)$/.test(base) ? base + "ing" : base.slice(0, -1) + "ing");
+  // One-syllable consonant-vowel-consonant words double the last letter (stop: stopped, stopping).
+  const end = /^[^aeiou]*[aeiou][bdgklmnprtvz]$/.test(base) ? base + base.slice(-1) : base;
+  return forms.concat(end + "ed", end + "ing");
 }
+const inflected = (heard, base) => heard === base || inflections(base).includes(heard);
 export function sayCorrect(heard, term) {
   const said = sayWords(heard), target = sayWords(term);
   if (!said.length || !target.length) return false;

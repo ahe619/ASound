@@ -225,6 +225,14 @@ test("say-it accepts the word inside a sentence and simple inflections, but not 
   assert.equal(sayCorrect("ice-cream", "ice cream"), true);
   assert.equal(sayCorrect("a pineapple", "apple"), false);
   assert.equal(sayCorrect("map", "mop"), false);
+  assert.equal(sayCorrect("stopped", "stop"), true);
+  assert.equal(sayCorrect("boxes", "box"), true);
+  assert.equal(sayCorrect("dying", "die"), true);
+  assert.equal(sayCorrect("agreeing", "agree"), true);
+  assert.equal(sayCorrect("scared", "scar"), false);
+  assert.equal(sayCorrect("hoped", "hop"), false);
+  assert.equal(sayCorrect("bed", "be"), false);
+  assert.equal(sayCorrect("cares", "car"), false);
   assert.equal(sayCorrect("", "apple"), false);
   const progress = answerProgress({}, true, "say", 1000);
   assert.equal(progress.lastPractice, "say");

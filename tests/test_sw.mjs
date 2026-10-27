@@ -120,6 +120,20 @@ test("on-demand assets are fetched on first use, verified, and kept for the next
   assert.deepEqual(next.fetched, []);
 });
 
+test("an on-demand asset cached by the old release after the update was installed still works offline", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "big runtime" };
+  const lazy = (f) => assets(f).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const old = worker("one", files, new CacheStorage(), lazy(files));
+  await old.dispatch("install");
+  const next = worker("two", { ...files, "index.html": "page two" }, old.storage, lazy({ ...files, "index.html": "page two" }));
+  await next.dispatch("install");
+  assert.equal(await (await old.get("vendor/runtime.wasm")).text(), "big runtime"); // first use, still on the old release
+  next.files = {}; // offline
+  next.fetched = [];
+  assert.equal(await (await next.get("vendor/runtime.wasm")).text(), "big runtime");
+  assert.deepEqual(next.fetched, []);
+});
+
 test("activation requires one requesting app window and ignores other projects", async () => {
   const w = worker("two", { "index.html": "new" });
   await w.dispatch("install");

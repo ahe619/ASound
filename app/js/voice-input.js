@@ -227,6 +227,10 @@
     for (let i = 0; i + run <= levels.length; i++) if (sustained(i)) { first = i; break; }
     for (let i = levels.length - run; i >= 0; i--) if (sustained(i)) { last = i + run - 1; break; }
     if (first < 0) return audio; // nothing clearly spoken: let the recognizer decide
+    // Hysteresis: soft words at either end ("well...", "...I think") stay in while above a lower level.
+    const soft = Math.max(0.006, floor * 2);
+    while (first > 0 && levels[first - 1] > soft) first--;
+    while (last < levels.length - 1 && levels[last + 1] > soft) last++;
     const start = Math.max(0, first * win - pad), end = Math.min(audio.length, (last + 1) * win + pad);
     return end - start >= 0.5 * RATE ? audio.slice(start, end) : audio;
   }
@@ -303,18 +307,15 @@
       mic.state = "paused";
       emit();
       requireCapture(id);
-      // Tap-to-talk is done: stop the audio graph until the next recording (startCapture resumes it), so the
-      // worklet does not keep posting frames to the page while nobody is recording.
-      try { mic.ctx && mic.ctx.state === "running" && mic.ctx.suspend().catch(() => {}); } catch {}
-      if (audio.length < 0.3 * RATE) return { text: "", audio };
-      // Tap-to-talk records the pauses before and after speaking; the small recognizer often returns nothing
-      // for a short phrase surrounded by silence, so recognize only the speech (plus a quarter second each side).
-      const speech = trimSilence(audio);
-      if (raw) return { text: "", audio: speech };
-      audio = speech;
+      if (audio.length < 0.3 * RATE || raw) return { text: "", audio }; // raw: the whole recording (timed segments)
       const copy = audio.slice();
+      // Tap-to-talk records the pauses before and after speaking; the small recognizer often returns nothing for
+      // a short phrase surrounded by silence, so it first hears only the speech, then the whole clip if that is empty.
+      const speech = trimSilence(audio);
       try {
-        const text = await transcribe(audio);
+        let text = await transcribe(speech === audio ? audio : speech);
+        requireCapture(id);
+        if (!text && speech !== audio) text = await transcribe(copy.slice());
         requireCapture(id);
         return { text, audio: copy };
       } catch (err) {

@@ -105,14 +105,22 @@ function startDrill() {
     }).slice(0, 5);
     // Too few from the model (common with the small ones): top up from the bank so a drill has about five.
     const more = extra.length >= 2 ? extra : [...extra, ...bankItems(d, 2 - extra.length, new Set([...have, ...extra.map((x) => x.text.toLowerCase())]))];
-    mine.items.push(...more);
-    drillStore.set(mine);
-    const progress = root().querySelector(".progress");
-    if (progress && view === "drill") progress.textContent = t("accent.progress", { n: mine.idx + 1, total: mine.items.length });
+    grow(mine, more);
   }).catch((e) => {
     if (!(e && e.code === "cancelled")) console.warn("drill sentences", e);
-    if (drill === mine && !ctl.signal.aborted) { mine.items.push(...bankItems(d, 2, new Set(mine.items.map((x) => x.text.toLowerCase())))); drillStore.set(mine); }
+    // Failed, or stopped so the model could explain a reading (see analyze): finish the drill from the bank.
+    if (drill === mine && (!ctl.signal.aborted || ctl.signal.reason === "yield")) grow(mine, bankItems(d, 2, new Set(mine.items.map((x) => x.text.toLowerCase()))));
   }).finally(() => { if (drillCtl === ctl) drillCtl = null; });
+}
+
+// New sentences arrived: update the count and, if the learner is on what was the last one, turn "More" into "Next".
+function grow(mine, more) {
+  mine.items.push(...more);
+  drillStore.set(mine);
+  if (view !== "drill" || drill !== mine) return;
+  const progress = root().querySelector(".drill-card .progress"), nav = root().querySelector(".drill-nav");
+  if (progress) progress.textContent = t("accent.progress", { n: mine.idx + 1, total: mine.items.length });
+  if (nav) nav.replaceWith(drillNav());
 }
 
 function leaveDrill() {
@@ -168,11 +176,15 @@ function renderDrill() {
           micButton({ big: true, label: t("accent.record"), onText: (heard) => { it.attempt = { heard, analysis: null }; drillStore.set(drill); paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill)); } }),
           h("span", { class: "hint-line" }, t("accent.recordHint")))),
       result),
-    h("div", { class: "drill-nav" },
-      h("button", { type: "button", class: "btn", disabled: drill.idx === 0, onclick: () => moveDrill(-1) }, t("accent.prev")),
-      drill.idx < drill.items.length - 1
-        ? h("button", { type: "button", class: "btn primary", onclick: () => moveDrill(1) }, t("accent.next"))
-        : h("button", { type: "button", class: "btn primary", onclick: startDrill }, t("accent.more"))));
+    drillNav());
+}
+
+function drillNav() {
+  return h("div", { class: "drill-nav" },
+    h("button", { type: "button", class: "btn", disabled: drill.idx === 0, onclick: () => moveDrill(-1) }, t("accent.prev")),
+    drill.idx < drill.items.length - 1
+      ? h("button", { type: "button", class: "btn primary", onclick: () => moveDrill(1) }, t("accent.next"))
+      : h("button", { type: "button", class: "btn primary", onclick: startDrill }, t("accent.more")));
 }
 
 // Score one reading of `target`; if words were missed, ask the model why.
@@ -193,6 +205,8 @@ function paintAttempt(box, target, attempt, persist) {
 
 async function analyze(box, target, attempt, persist) {
   fill(box, h("p", { class: "hint-line" }, t("accent.analyzing"), thinkingDots()));
+  // The model runs one request at a time: the learner is waiting on this, not on extra drill sentences.
+  if (drillCtl) drillCtl.abort("yield");
   try {
     const o = await askJSON(P.analyzePrompt(target, attempt.heard));
     attempt.analysis = {

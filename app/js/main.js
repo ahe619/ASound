@@ -62,12 +62,14 @@ async function boot() {
   // packs in the background. The desktop app (local http server) decides between setup and practice first.
   const hosted = location.protocol === "https:" && !inAppShell;
   const engines = startEngines(renderModels);
+  const landing = location.hash.slice(1); // read before navigation writes its own entry
+  const firstTab = ["talk", "accent", "vocab", "me"].includes(landing) ? landing : "vocab";
   if (hosted) {
-    const hash = location.hash.slice(1);
-    setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
+    setTab(firstTab);
     initNavigation();
   }
   await engines;
+  if (hosted && state.tab === "models") renderModels(); // opened while the packs were still being checked
   // Only hosted web releases update themselves. Bundled desktop/mobile assets use package updates.
   initUpdates({
     enabled: packMode() === "web" && !inAppShell,
@@ -93,7 +95,9 @@ async function boot() {
   // Optional conversation resources remain accessible from the settings screen.
   if (hosted) {
     if (ready()) {
-      resumeIfRecent(); // a conversation from the last half hour comes back, as before
+      // A conversation from the last half hour comes back, as before, unless the address named another tab or
+      // the learner has already moved on while the packs were checked.
+      if (state.tab === firstTab && !["accent", "vocab", "me"].includes(landing)) resumeIfRecent();
       const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
       idle(() => warmUp(), { timeout: 4000 });
     }

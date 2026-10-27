@@ -67,7 +67,7 @@ function fixture({ holdWorklet = false, holdResume = false } = {}) {
     AudioContext, AudioWorkletNode, Worker, URL: BrowserURL, Blob, Float32Array,
     console: { warn: (...args) => warnings.push(args) },
     h: element, icon: () => ({}), t: (key) => key, toast: (message) => toasts.push(message),
-    stopSpeaking() {}, unlockAudio() {},
+    stopSpeaking() {}, unlockAudio() {}, enginesApplied: Promise.resolve(),
   });
   vm.runInContext("globalThis.window = globalThis;", context);
   vm.runInContext(voiceSource, context, { filename: "voice-input.js" });

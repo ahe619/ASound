@@ -4,6 +4,7 @@
 import { h, icon, toast } from "./util.js";
 import { t } from "./i18n.js";
 import { stopSpeaking, unlockAudio } from "./speech.js";
+import { enginesApplied } from "./engines.js";
 
 export const micSupported = () => !!(window.ASoundMic && window.ASoundMic.supported);
 
@@ -15,11 +16,16 @@ function micErrorText(e) {
 }
 
 // Speech needs the listening model (a downloadable pack). Without it, say so and open the downloads.
+// false, or a promise of true when there is no speech model (the learner is sent to the models page). The hosted
+// page is usable before the model packs are checked: a tap in that moment waits for the check, not "no model".
 function needModel() {
   if (!window.ASoundMic.hasModel || window.ASoundMic.hasModel()) return false;
-  toast(t("mic.err.noModel"));
-  import("./models.js").then((m) => m.showModels()).catch(() => {});
-  return true;
+  return enginesApplied.then(() => {
+    if (window.ASoundMic.hasModel()) return false;
+    toast(t("mic.err.noModel"));
+    import("./models.js").then((m) => m.showModels()).catch(() => {});
+    return true;
+  });
 }
 function asrErrorText(e) {
   if (e && e.code === "no_model") return t("mic.err.noModel");
@@ -61,7 +67,8 @@ export function micButton({ onText, onAudio, big = false, label, lang = "" } = {
     if (state === "busy") return;
     if (state === "starting") { cancelCurrent(); return; }
     if (state === "idle") {
-      if (!lang && needModel()) return;
+      const missing = !lang && needModel(); // false when the model is there: no await, the tap starts at once
+      if (missing && await missing) return;
       cancelCurrent();
       stopSpeaking();
       const id = ++operation;
@@ -116,7 +123,8 @@ export const handsFree = {
   // endMs: how long a pause ends a turn (learners need longer pauses than native speakers)
   async start({ onText, onState, onLevel, endMs }) {
     if (!micSupported()) { toast(t("mic.err.unsupported")); return false; }
-    if (needModel()) return false;
+    const missing = needModel();
+    if (missing && await missing) return false;
     this.stop();
     cancelCurrent();
     const run = ++handsFreeRun;

@@ -126,6 +126,14 @@ self.addEventListener("fetch", (event) => {
     if (cached) return cached;
     // A browser can evict an individual file. Recover only this exact release's bytes.
     const asset = ASSETS.find((a) => new URL(a.url, SCOPE).href === url.href);
+    // An on-demand file first used after this release was installed sits in the previous release's cache.
+    for (const old of await completeCaches()) {
+      const hit = await old.cache.match(url.href);
+      if (hit && await digest(hit) === asset.sha256) {
+        await (await caches.open(CACHE)).put(url.href, hit.clone());
+        return hit;
+      }
+    }
     try {
       const response = await fetch(new Request(url.href, { cache: "no-store", credentials: "same-origin" }));
       if (response.ok && response.type !== "opaque" && await digest(response) === asset.sha256) {
