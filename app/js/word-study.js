@@ -553,7 +553,7 @@ function sayAgain(word) {
   const result = h("span", { class: "hint-line", role: "status" });
   const mic = micButton({
     label: t("wstudy.sayAgain"),
-    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; },
+    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; document.getElementById("ws-compare")?.removeAttribute("hidden"); },
     onText: (heard) => fill(result, icon(sayCorrect(heard, word.term) ? "check" : "close"), " ", t("wstudy.sayHeard"), " ",
       h("span", { lang: "en" }, heard)),
   });
@@ -592,8 +592,8 @@ function answerFeedback(session, word) {
     h("strong", null, icon(attempt.correct ? "check" : "close"), t(attempt.correct ? "wstudy.answerCorrect" : "wstudy.answerWrong")),
     attempt.practice === "spelling" ? h("p", null, t("wstudy.yourAnswer"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
     attempt.practice === "say" ? h("p", null, t("wstudy.sayHeard"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
-    attempt.practice === "say" && lastTake && lastTake.wordId === word.id
-      ? h("button", { type: "button", class: "btn", onclick: action(() => compareTake(word)) }, icon("speaker"), t("wstudy.compare")) : null,
+    attempt.practice === "say" ? h("button", { type: "button", id: "ws-compare", class: "btn", hidden: !(lastTake && lastTake.wordId === word.id),
+      onclick: action(() => compareTake(word)) }, icon("speaker"), t("wstudy.compare")) : null,
     attempt.practice === "say" && !attempt.correct ? sayAgain(word) : null,
     h("p", null, t("wstudy.correctAnswer"), " ", h("b", { lang: "en" }, word.term)),
     h("p", { class: "hint-line" }, t(attempt.correct ? "wstudy.correctReview" : "wstudy.wrongReview")));
