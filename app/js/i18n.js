@@ -25,9 +25,14 @@ async function loadLocale(code) {
 }
 
 export async function setLanguage(code) {
-  if (!Object.keys(fallback).length) fallback = await loadLocale("en");
   lang = UI_LANGS.some(([c]) => c === code) ? code : "en";
-  dict = lang === "en" ? fallback : await loadLocale(lang).catch(() => ({}));
+  // English (the fallback) and the chosen language load in parallel: one round trip instead of two.
+  const [en, own] = await Promise.all([
+    Object.keys(fallback).length ? fallback : loadLocale("en"),
+    lang === "en" ? null : loadLocale(lang).catch(() => ({})),
+  ]);
+  fallback = en;
+  dict = lang === "en" ? fallback : own;
   document.documentElement.lang = HTML_LANG[lang] || lang;
   document.documentElement.dir = RTL.has(lang) ? "rtl" : "ltr";
   applyI18n(document);

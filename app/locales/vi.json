@@ -444,5 +444,8 @@
   "native.send": "Lấy câu tiếng Anh",
   "native.needPack": "Để nói thành tiếng, hãy tải “Trợ giúp bằng ngôn ngữ của bạn” trong phần Mô hình. Bạn có thể gõ ngay bây giờ.",
   "modes.title": "Thêm cách luyện tập",
-  "modes.failed": "Không thể bắt đầu chế độ luyện tập này."
+  "modes.failed": "Không thể bắt đầu chế độ luyện tập này.",
+  "mic.err.noModel": "Cần tải mô hình nghe (khoảng 32 MB) để dùng giọng nói. Đang mở trang tải xuống…",
+  "mic.err.asrLoad": "Không tải được mô hình nghe. Hãy tải lại trong Mô hình & tải xuống.",
+  "check.fallback": "Hãy luyện những từ chưa được nhận ra: nghe trước, rồi đọc lại đoạn văn."
 }

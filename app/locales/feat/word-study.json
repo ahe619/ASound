@@ -109,7 +109,23 @@
     "wstudy.resultCorrect": "Correct",
     "wstudy.resultWrong": "Incorrect",
     "wstudy.accuracy": "Accuracy",
-    "wstudy.selfRatedCount": "{n} words were reviewed as flashcards and are not included in quiz accuracy."
+    "wstudy.selfRatedCount": "{n} words were reviewed as flashcards and are not included in quiz accuracy.",
+    "wstudy.ipaUs": "US",
+    "wstudy.ipaUk": "UK",
+    "wstudy.practice.say": "Say it",
+    "wstudy.practiceHint.say": "See the picture and the meaning, then say the word out loud in a short sentence. The listening model checks it.",
+    "wstudy.sayPrompt": "Say the English word",
+    "wstudy.sayTitle": "What is this in English?",
+    "wstudy.sayMic": "Tap and say the word",
+    "wstudy.sayHint": "Say it in a short sentence, like “It’s a ___.” or “I like to ___.” (single words are hard to hear). Tap again when done.",
+    "wstudy.sayTypePlaceholder": "or type it",
+    "wstudy.sayAlternative": "That answer also matches the definition. Use the first-letter and length clue to try the target word. This attempt is not counted as a mistake.",
+    "wstudy.sayTooLong": "The answer was too long to check. Please try one short sentence; this attempt was not scored.",
+    "wstudy.sayHeard": "Heard:",
+    "wstudy.compare": "Compare: model, you, model",
+    "wstudy.missedTitle": "Words to look at again",
+    "wstudy.retryMissed": "Practice these {n} again",
+    "wstudy.sayAgain": "Say it again (not scored)"
   },
   "zh": {
     "wstudy.loading": "正在加载词库…",
@@ -221,6 +237,22 @@
     "wstudy.resultCorrect": "答对",
     "wstudy.resultWrong": "答错",
     "wstudy.accuracy": "正确率",
-    "wstudy.selfRatedCount": "另有 {n} 个词通过翻卡完成，不计入选择题正确率。"
+    "wstudy.selfRatedCount": "另有 {n} 个词通过翻卡完成，不计入选择题正确率。",
+    "wstudy.ipaUs": "美",
+    "wstudy.ipaUk": "英",
+    "wstudy.practice.say": "开口说",
+    "wstudy.practiceHint.say": "看图和中文意思，用一个短句大声说出这个词，由听写模型判断。",
+    "wstudy.sayPrompt": "说出这个英文单词",
+    "wstudy.sayTitle": "这个用英文怎么说？",
+    "wstudy.sayMic": "点一下，说出单词",
+    "wstudy.sayHint": "用一个短句说出来，比如“It’s a ___.”或“I like to ___.”（单个单词不好识别），说完再点一下。",
+    "wstudy.sayTypePlaceholder": "也可以打字",
+    "wstudy.sayAlternative": "这个答案也成立。请根据首字母和字母数提示，尝试本题的目标单词；这次不会记为错误。",
+    "wstudy.sayTooLong": "这次识别的内容太长，请用一个短句再试一次；此次不计分。",
+    "wstudy.sayHeard": "听到的是：",
+    "wstudy.compare": "对比：示范、你、示范",
+    "wstudy.missedTitle": "需要再看一遍的词",
+    "wstudy.retryMissed": "再练这 {n} 个词",
+    "wstudy.sayAgain": "再说一次（不计分）"
   }
 }

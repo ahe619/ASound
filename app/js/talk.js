@@ -362,9 +362,31 @@ export function startProfile() {
   beginSession(newSession({ kind: "profile", scenario: "chat", level: prefs.level }));
 }
 
+// Scripted first lines for the built-in scenes, used with the small phone models (their own openers often go off track).
+const OPENERS = {
+  chat: ["Hey, I don't think we've met. I'm Alex. What brings you to this event?", "Hi there! I'm Alex. How's your week been so far?"],
+  office: ["Hi, come on in! What can I help you with today?", "Hey, good to see you. What did you want to talk about?"],
+  group: ["Okay, we need to split up the work for this project. Which part do you want to take?", "Hey! The deadline's next Friday. Where are you at with your part?"],
+  cafe: ["Hi, welcome in! What can I get started for you today?", "Hey there! What are you in the mood for today?"],
+  interview: ["Thanks for coming in today. So, tell me a little about yourself.", "Nice to meet you. To start, what made you apply for this internship?"],
+  doctor: ["Hi, I'm the nurse on duty today. What brings you in?", "Hello, have a seat. So, what's been going on?"],
+  exam: ["Good morning. Could you tell me your full name, please?", "Let's begin. Could you tell me where you're from?"],
+  ita: ["Hi! So what are we learning about in today's class?", "Hey, I'm in your section. What concept are you teaching us today?"],
+};
+
 function beginSession(s) {
   stopSpeaking();
   state.session = s;
+  if (s.kind === "talk" && !s.turns.length && OPENERS[s.scenario] && P.smallModel()) {
+    const turn = { role: "assistant", text: pick(OPENERS[s.scenario]) };
+    s.turns.push(turn);
+    persistLive();
+    renderChat();
+    setTalkView("chat");
+    const el = thread().lastElementChild;
+    if (el) afterReply(turn, el);
+    return;
+  }
   persistLive();
   renderChat();
   setTalkView("chat");
@@ -516,11 +538,32 @@ function renderTurn(turn) {
 const TYPES = ["grammar", "word", "natural", "pronunciation"];
 function normFeedback(raw, said) {
   const o = isObj(raw) ? raw : {};
+  // A "mistake" whose wrong words the learner never said is the model making things up: drop it.
+  const saidKey = ` ${tokens(said).map(normTok).filter(Boolean).join(" ")} `;
+  // Commas/semicolons/slashes list alternatives. An ellipsis instead skips words:
+  // every quoted fragment must occur in order, not just a shared noun at the end.
+  const inSaid = (w) => !w || w.split(/[,;/]/).some((candidate) => {
+    const parts = candidate.split(/\.{2,}|…/).map(phraseKey).filter(Boolean);
+    let cursor = 0;
+    return parts.length > 0 && parts.every((key) => {
+      const at = saidKey.indexOf(` ${key} `, cursor);
+      if (at < 0) return false;
+      cursor = at + key.length + 1;
+      return true;
+    });
+  });
   const issues = arr(o.issues).filter(isObj)
     .map((x) => ({ type: TYPES.includes(str(x.type)) ? str(x.type) : "grammar", wrong: str(x.wrong), right: str(x.right), explain: str(x.explain) }))
-    .filter((x) => (x.explain || x.right) && !(x.wrong && x.right && looseEqual(x.wrong, x.right)))
+    .filter((x) => (x.explain || x.right) && !(x.wrong && x.right && looseEqual(x.wrong, x.right)) && inSaid(x.wrong))
     .slice(0, 4);
-  const better = arr(o.better).filter(isObj).map((x) => ({ en: str(x.en), meaning: str(x.meaning || x.zh) })).filter((x) => x.en && !sameWords(x.en, said)).slice(0, 2);
+  // A "more natural" version that only swaps one word is noise (small models do this often).
+  const saidWords = tokens(said).map(normTok).filter(Boolean);
+  const barelyDifferent = (en) => {
+    const words = tokens(en).map(normTok).filter(Boolean);
+    return Math.abs(words.length - saidWords.length) <= 1 && words.filter((w, i) => w !== saidWords[i]).length <= 1;
+  };
+  const better = arr(o.better).filter(isObj).map((x) => ({ en: str(x.en), meaning: str(x.meaning || x.zh) }))
+    .filter((x) => x.en && !sameWords(x.en, said) && !barelyDifferent(x.en)).slice(0, 2);
   let corrected = str(o.corrected) || said;
   if (looseEqual(corrected, said)) corrected = said;
   const ok = issues.length === 0 && (o.ok !== false || sameWords(corrected, said));
@@ -554,24 +597,31 @@ function issueItem(it) {
       it.explain ? h("span", null, it.explain) : null));
 }
 
-async function requestFeedback(turn) {
+function requestFeedback(turn) {
   const s = state.session, box = turn._fb;
-  if (!s || !box) return;
+  if (!s || !box) return Promise.resolve();
   box.hidden = false;
   box.className = "fb pending";
   fill(box, h("span", null, t("fb.checking")), thinkingDots());
   const idx = s.turns.indexOf(turn);
-  try {
-    const raw = await askJSON(P.feedbackPrompt(s, lastAssistant(s, idx), turn.text));
-    turn.fb = normFeedback(raw, turn.text);
-    if (state.session === s) persistLive();
-    renderFeedback(box, turn.fb, turn.text);
-    scrollThread();
-  } catch (e) {
-    if (e && e.code === "cancelled") return;
-    box.className = "fb failed";
-    fill(box, h("span", null, aiErrorText(e)), h("button", { type: "button", class: "mini", onclick: () => requestFeedback(turn) }, t("chat.retry")));
-  }
+  // All entry points (automatic, View, and Retry) own the current request. A
+  // superseded check must not overwrite the latest one or disappear from End's wait.
+  const pending = Promise.resolve().then(async () => {
+    try {
+      const raw = await askJSON(P.feedbackPrompt(s, lastAssistant(s, idx), turn.text));
+      if (turn._fbP !== pending) return;
+      turn.fb = normFeedback(raw, turn.text);
+      if (state.session === s) persistLive();
+      renderFeedback(box, turn.fb, turn.text);
+      scrollThread();
+    } catch (e) {
+      if (turn._fbP !== pending || (e && e.code === "cancelled")) return;
+      box.className = "fb failed";
+      fill(box, h("span", null, aiErrorText(e)), h("button", { type: "button", class: "mini", onclick: () => requestFeedback(turn) }, t("chat.retry")));
+    }
+  }).finally(() => { if (turn._fbP === pending) delete turn._fbP; });
+  turn._fbP = pending;
+  return pending;
 }
 
 /* help: the learner said it in Chinese */
@@ -628,9 +678,12 @@ async function sendText(raw) {
   if (used.length) { el.append(usedChips(used)); renderSceneCard(); }
   thread().append(el);
   scrollThread(true);
+  // The partner's reply goes into the model queue first; the red-pen check runs after it, so the conversation
+  // never waits for a correction (on the small phone models a check can take 5-15 s).
+  const reply = requestReply();
   if (s.kind === "placement") { renderSceneCard(); paintChatLevel(); }
   else requestFeedback(turn);
-  await requestReply();
+  await reply;
   return true;
 }
 
@@ -683,14 +736,21 @@ async function requestReply() {
   const ctl = new AbortController();
   s._ctl = ctl;
   const input = [{ role: "user", content: P.partnerPrompt(s) }, ...s.turns.slice(-MAX_TURNS).filter((x) => x.text).map((x) => ({ role: x.role, content: x.text }))];
+  let latest = "", frame = 0;
   try {
     const text = await ask(input, {
       signal: ctl.signal,
+      // Tokens stream faster than the screen refreshes: draw the latest text once per frame.
       onText: ({ text }) => {
-        bubble.classList.remove("thinking");
-        bubble.setAttribute("lang", "en");
-        bubble.textContent = text;
-        scrollThread();
+        latest = text;
+        if (frame) return;
+        frame = (window.requestAnimationFrame || ((fn) => setTimeout(fn, 16)))(() => {
+          frame = 0;
+          bubble.classList.remove("thinking");
+          bubble.setAttribute("lang", "en");
+          bubble.textContent = latest;
+          scrollThread();
+        });
       },
     });
     if (state.session !== s) return;
@@ -708,6 +768,8 @@ async function requestReply() {
     li.append(h("div", { class: "msg-tools" }, h("button", { type: "button", class: "mini", onclick: () => { li.remove(); requestReply(); } }, t("chat.retry"))));
     if (chatVisible()) { setLive("listening"); handsFree.resume(); }
   } finally {
+    // A frame still pending would paint streamed text over the error message.
+    if (frame) (window.cancelAnimationFrame || clearTimeout)(frame);
     if (s._ctl === ctl) s._ctl = null;
     if (state.session === s) setBusy(false);
   }
@@ -856,19 +918,22 @@ async function toggleLive() {
       if (!sent) { handsFree.resume(); setLive("listening"); }
     },
     onState: (st) => setLive(st === "listening" && held ? "holding" : st),
-    onLevel: (v) => { liveBar.style.width = `${Math.round(v * 100)}%`; },
+    onLevel: (v) => { liveBar.style.transform = `scaleX(${v.toFixed(2)})`; }, // compositor-only, no layout per frame
   });
   if (ok) {
     prefs.handsFree = true;
     savePrefs();
-    if (state.busy || isSpeaking()) handsFree.pause();
+    // Turned on while the partner is still talking or thinking: wait, and say so (the check below resumes after).
+    if (state.busy || isSpeaking()) { handsFree.pause(); setLive(isSpeaking() ? "speaking" : "thinking"); }
     paintLive();
   }
 }
-// If speech was stopped by hand, hands-free would stay paused; pick it up again.
+// Hands-free must never sit paused while nothing else is going on (speech stopped by hand, or turned on mid-reply).
 setInterval(() => {
-  if (chatVisible() && handsFree.on && state.session && !state.busy && !isSpeaking() && (liveState === "speaking" || liveState === "thinking")) {
-    setLive("listening");
+  if (!chatVisible() || !handsFree.on || !state.session || state.busy || isSpeaking()) return;
+  const paused = window.ASoundMic && window.ASoundMic.status().mic === "paused";
+  if (liveState === "speaking" || liveState === "thinking" || (paused && (liveState === "listening" || liveState === "holding"))) {
+    setLive(held ? "holding" : "listening");
     handsFree.resume();
   }
 }, 1500);
@@ -896,7 +961,7 @@ function closeSession() {
   setBusy(false);
 }
 
-function finishSession() {
+async function finishSession() {
   const s = state.session;
   if (!s) return;
   stopSpeaking();
@@ -908,7 +973,19 @@ function finishSession() {
   const doc = finishedDoc(s);
   state.summaryOf = doc;
   setTalkView("summary");
-  summarize(doc);
+  // The last line's correction runs after the partner's reply. Let it land so the summary and the saved talk
+  // include it (the summary request would wait behind it in the model queue anyway).
+  let checking = s.turns.filter((x) => x._fbP).map((x) => x._fbP);
+  if (checking.length) {
+    paintSummaryLoading(doc);
+    while (checking.length) {
+      await Promise.allSettled(checking);
+      if (state.summaryOf !== doc || state.session !== s) return;
+      checking = s.turns.filter((x) => x._fbP).map((x) => x._fbP);
+    }
+    Object.assign(doc, finishedDoc(s), { endedAt: doc.endedAt });
+  }
+  summarize(doc, s);
 }
 
 function summaryHeader(doc, withBack = true) {
@@ -919,31 +996,46 @@ function summaryHeader(doc, withBack = true) {
     h("p", { class: "sum-meta" }, [levelName(doc.level), fmtDate(doc.endedAt), t("sum.lines", { n: doc.lines || 0 }), t("sum.fixes", { n: doc.fixes || 0 })].join(" \u00b7 ")));
 }
 function goHome() {
-  state.summaryOf = null;
+  cancelSummary();
   renderTalkHome();
   setTalkView("home");
 }
 
-async function summarize(doc) {
+function cancelSummary() {
+  const doc = state.summaryOf;
+  state.summaryOf = null;
   if (state.summaryCtl) state.summaryCtl.abort();
-  const ctl = new AbortController();
-  state.summaryCtl = ctl;
+  state.summaryCtl = null;
+  // Forward can revisit this history entry. Show the available transcript, not
+  // an abandoned loading spinner; the live conversation remains resumable.
+  if (doc && !doc.summary) renderSummary(doc);
+}
+
+function paintSummaryLoading(doc) {
   fill($("#summary"), summaryHeader(doc, false), h("div", { class: "loading-card" },
     h("p", null, t("sum.loading"), thinkingDots()), h("p", { class: "lede" }, t("sum.wait")),
     h("button", { type: "button", class: "btn", onclick: backToChat }, t("sum.backToChat"))));
+}
+
+async function summarize(doc, owner = state.session) {
+  if (!owner || state.session !== owner || state.summaryOf !== doc) return;
+  if (state.summaryCtl) state.summaryCtl.abort();
+  const ctl = new AbortController();
+  state.summaryCtl = ctl;
+  paintSummaryLoading(doc);
   try {
     const raw = await askJSON(P.summaryPrompt(doc), { signal: ctl.signal });
-    if (state.summaryOf !== doc) return;
-    doc.summary = normSummary(raw);
+    if (state.summaryOf !== doc || state.session !== owner || state.summaryCtl !== ctl || ctl.signal.aborted) return;
+    doc.summary = normSummary(raw, doc);
     closeSession();
     sessions.save(doc);
     renderSummary(doc);
   } catch (e) {
-    if ((e && e.code === "cancelled") || state.summaryOf !== doc) return;
+    if ((e && e.code === "cancelled") || state.summaryOf !== doc || state.session !== owner || ctl.signal.aborted) return;
     fill($("#summary"), summaryHeader(doc, false), h("div", { class: "loading-card" },
       h("p", null, aiErrorText(e)),
       h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn primary", onclick: () => summarize(doc) }, t("sum.regen")),
+        h("button", { type: "button", class: "btn primary", onclick: () => summarize(doc, owner) }, t("sum.regen")),
         h("button", { type: "button", class: "btn", onclick: () => { closeSession(); sessions.save(doc); toast(t("sum.saved")); goHome(); } }, t("sum.saveOnly")),
         h("button", { type: "button", class: "btn quiet", onclick: backToChat }, t("sum.backToChat")))));
   } finally {
@@ -951,17 +1043,32 @@ async function summarize(doc) {
   }
 }
 function backToChat() {
-  if (state.summaryCtl) state.summaryCtl.abort();
-  state.summaryOf = null;
+  cancelSummary();
   if (!state.session) { goHome(); return; }
   setTalkView("chat");
 }
 
-function normSummary(raw) {
+function normSummary(raw, doc = null) {
   const o = isObj(raw) ? raw : {};
+  // Small models sometimes praise the learner for the partner's lines: drop strengths that quote one
+  // (but not words the learner said too: partners often echo the learner, and learners echo the question).
+  const lines = (role) => (doc ? arr(doc.turns).filter((x) => x.role === role).map((x) => phraseKey(x.text)) : []);
+  const partner = lines("assistant"), learner = lines("user");
+  // Quoted text: "...", a curly pair, '...' whose apostrophes (don't, I'd) stay inside the quote and which may
+  // touch Chinese or Japanese text, and the marks other help languages use: corner brackets, guillemets, German low-high.
+  // (No lookbehind: this module loads at startup and older iPhone Safari cannot parse one.)
+  const QUOTED = /"([^"]{12,})"|\u201c([^\u201d]{12,})\u201d|(?:^|[^\p{Script=Latin}])['\u2018]((?:[^'\u2019]|['\u2019](?=\p{L})){12,}?)['\u2019](?!\p{Script=Latin})|\u300c([^\u300d]{12,})\u300d|\u300e([^\u300f]{12,})\u300f|\u00ab\s*([^\u00bb]{12,}?)\s*\u00bb|\u201e([^\u201c\u201d]{12,})[\u201c\u201d]/gu;
+  const quotesPartner = (s) => {
+    QUOTED.lastIndex = 0;
+    for (let m; (m = QUOTED.exec(String(s)));) {
+      const key = phraseKey(m.slice(1).find(Boolean)); // the quoted words only (a single quote's match starts one character early)
+      if (key && partner.some((p) => p.includes(key)) && !learner.some((l) => l.includes(key))) return true;
+    }
+    return false;
+  };
   return {
     overall: str(o.overall),
-    strengths: arr(o.strengths).map(str).filter(Boolean).slice(0, 4),
+    strengths: arr(o.strengths).map(str).filter((s) => s && !quotesPartner(s)).slice(0, 4),
     focus: arr(o.focus).filter(isObj).map((x) => ({ wrong: str(x.wrong), right: str(x.right), explain: str(x.explain) }))
       .filter((x) => (x.right || x.explain) && !(x.wrong && x.right && looseEqual(x.wrong, x.right))).slice(0, 5),
     expressions: arr(o.expressions).filter(isObj).map((x) => ({ term: str(x.term), ipa: str(x.ipa), meaning: str(x.meaning || x.zh), example: str(x.example) })).filter((x) => x.term).slice(0, 10),
@@ -970,6 +1077,7 @@ function normSummary(raw) {
 }
 
 export function openSummary(doc) {
+  cancelSummary();
   state.summaryOf = doc;
   renderSummary(doc);
   setTalkView("summary");
@@ -1132,6 +1240,11 @@ function autosize() {
 }
 
 export function initTalk() {
+  registerViewCleanup("talk", "summary", () => {
+    // Browser/system Back and tab changes must invalidate both the feedback
+    // wait and the summary request, just like the explicit Back to chat button.
+    if (state.tab !== "talk" || state.talkView !== "summary") cancelSummary();
+  });
   registerViewCleanup("talk", "chat", () => {
     // Returning home or opening another page pauses the microphone without
     // erasing the conversation. A late model reply may save text, never autoplay.

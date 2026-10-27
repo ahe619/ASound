@@ -6,11 +6,12 @@ import { t, getLanguage } from "./i18n.js";
 import { askJSON, aiErrorText } from "./ai.js";
 import * as P from "./prompts.js";
 import { readingMatch } from "./diff.js";
-import { speakBtn, stopSpeaking, unlockAudio } from "./speech.js";
+import { speakBtn, stopSpeaking, unlockAudio, prefetchSpeech } from "./speech.js";
 import { micButton } from "./mic.js";
 import { checks, drillStore } from "./store.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
 import { modeCards } from "./modes.js";
+import { DRILL_BANK } from "./drill-bank.js";
 
 let view = "home";        // home | drill | check
 let drill = null;         // {drillId, level, items, idx}
@@ -62,32 +63,69 @@ function renderHome() {
 
 /* ---------- drills ---------- */
 
-async function startDrill() {
+// A drill starts at once with hand-written sentences; sentences the local model writes for the learner's level
+// are added behind them when they arrive (on a phone that can take a while), so nobody waits on a spinner.
+let drillCtl = null;
+function bankItems(d, count, skip = new Set()) {
+  return [...(DRILL_BANK[d.id] || [])].filter((s) => !skip.has(s.toLowerCase())).sort(() => Math.random() - 0.5)
+    .slice(0, count).map((text) => ({ text, meaning: "", sounds: "", ipa: "", tips: [], attempt: null }));
+}
+
+function startDrill() {
   unlockAudio();
   stopSpeaking();
   const d = drillById(prefs.drill), level = prefs.level;
-  fill(root(), h("div", { class: "loading-card" }, h("p", null, t("accent.writing", { name: t(`drill.${d.id}.name`) }), thinkingDots())));
+  if (drillCtl) drillCtl.abort();
+  const items = bankItems(d, 3);
+  if (!items.length) { toast(aiErrorText({ code: "invalid_json" })); renderHome(); return; }
+  const mine = { drillId: d.id, level, items, idx: 0 };
+  drill = mine;
+  drillStore.set(drill);
+  view = "drill";
+  renderDrill();
   scrollTop();
-  try {
-    const raw = await askJSON(P.drillPrompt(d, level), { cache: false });
-    const items = arr(raw && raw.sentences).filter(isObj).map((x) => ({
+  const ctl = new AbortController();
+  drillCtl = ctl;
+  askJSON(P.drillPrompt(d, level), { cache: false, signal: ctl.signal }).then((raw) => {
+    if (drill !== mine || ctl.signal.aborted) return;
+    // Keep real sentences only: not the prompt's own example, 5 to 20 words, not already in the drill.
+    const words = (x) => x.split(/\s+/).filter(Boolean).length;
+    const have = new Set(mine.items.map((x) => x.text.toLowerCase()));
+    const extra = arr(raw && raw.sentences).filter(isObj).map((x) => ({
       text: str(x.text), meaning: str(x.meaning), sounds: str(x.sounds), ipa: str(x.ipa),
       tips: arr(x.tips).filter(isObj).map((tp) => ({ part: str(tp.part), tip: str(tp.tip) })).filter((tp) => tp.tip).slice(0, 3),
       attempt: null,
-    })).filter((x) => x.text).slice(0, 8);
-    if (!items.length) throw { code: "invalid_json" };
-    drill = { drillId: d.id, level, items, idx: 0 };
-    drillStore.set(drill);
-    view = "drill";
-    renderDrill();
-  } catch (e) {
-    toast(aiErrorText(e));
-    renderHome();
-  }
+    })).filter((x) => {
+      const key = x.text.toLowerCase();
+      // drop copies of the prompt's own wording (the small models echo the example lists), and repeats
+      const copied = /gonna grab a cup/i.test(x.text) || d.focus.toLowerCase().includes(key.replace(/[.!?]+$/, ""));
+      if (!x.text || copied || words(x.text) < 5 || words(x.text) > 20 || have.has(key)) return false;
+      have.add(key);
+      return true;
+    }).slice(0, 5);
+    // Too few from the model (common with the small ones): top up from the bank so a drill has about five.
+    const more = extra.length >= 2 ? extra : [...extra, ...bankItems(d, 2 - extra.length, new Set([...have, ...extra.map((x) => x.text.toLowerCase())]))];
+    grow(mine, more);
+  }).catch((e) => {
+    if (!(e && e.code === "cancelled")) console.warn("drill sentences", e);
+    // Failed, or stopped so the model could explain a reading (see analyze): finish the drill from the bank.
+    if (drill === mine && (!ctl.signal.aborted || ctl.signal.reason === "yield")) grow(mine, bankItems(d, 2, new Set(mine.items.map((x) => x.text.toLowerCase()))));
+  }).finally(() => { if (drillCtl === ctl) drillCtl = null; });
+}
+
+// New sentences arrived: update the count and, if the learner is on what was the last one, turn "More" into "Next".
+function grow(mine, more) {
+  mine.items.push(...more);
+  drillStore.set(mine);
+  if (view !== "drill" || drill !== mine) return;
+  const progress = root().querySelector(".drill-card .progress"), nav = root().querySelector(".drill-nav");
+  if (progress) progress.textContent = t("accent.progress", { n: mine.idx + 1, total: mine.items.length });
+  if (nav) nav.replaceWith(drillNav());
 }
 
 function leaveDrill() {
   stopSpeaking();
+  if (drillCtl) { drillCtl.abort(); drillCtl = null; }
   drill = null;
   drillStore.clear();
   renderHome();
@@ -104,6 +142,7 @@ function moveDrill(step) {
 
 function renderDrill() {
   const d = drillById(drill.drillId), it = drill.items[drill.idx];
+  prefetchSpeech(it.text); // "Listen" is the first thing a learner taps on a drill sentence
   const result = h("div", { class: "stack-sm" });
   if (it.attempt) paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill));
   const ipaLine = it.ipa ? h("p", { class: "ipa-line", hidden: !prefs.showIpa }, fmtIpa(it.ipa)) : null;
@@ -138,11 +177,15 @@ function renderDrill() {
           micButton({ big: true, label: t("accent.record"), onText: (heard) => { it.attempt = { heard, analysis: null }; drillStore.set(drill); paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill)); } }),
           h("span", { class: "hint-line" }, t("accent.recordHint")))),
       result),
-    h("div", { class: "drill-nav" },
-      h("button", { type: "button", class: "btn", disabled: drill.idx === 0, onclick: () => moveDrill(-1) }, t("accent.prev")),
-      drill.idx < drill.items.length - 1
-        ? h("button", { type: "button", class: "btn primary", onclick: () => moveDrill(1) }, t("accent.next"))
-        : h("button", { type: "button", class: "btn primary", onclick: startDrill }, t("accent.more"))));
+    drillNav());
+}
+
+function drillNav() {
+  return h("div", { class: "drill-nav" },
+    h("button", { type: "button", class: "btn", disabled: drill.idx === 0, onclick: () => moveDrill(-1) }, t("accent.prev")),
+    drill.idx < drill.items.length - 1
+      ? h("button", { type: "button", class: "btn primary", onclick: () => moveDrill(1) }, t("accent.next"))
+      : h("button", { type: "button", class: "btn primary", onclick: startDrill }, t("accent.more")));
 }
 
 // Score one reading of `target`; if words were missed, ask the model why.
@@ -163,6 +206,8 @@ function paintAttempt(box, target, attempt, persist) {
 
 async function analyze(box, target, attempt, persist) {
   fill(box, h("p", { class: "hint-line" }, t("accent.analyzing"), thinkingDots()));
+  // The model runs one request at a time: the learner is waiting on this, not on extra drill sentences.
+  if (drillCtl) drillCtl.abort("yield");
   try {
     const o = await askJSON(P.analyzePrompt(target, attempt.heard));
     attempt.analysis = {
@@ -245,7 +290,21 @@ function paintCheckResult(box) {
     check.saved = true;
   }
   if (a.report) paintReport(reportBox, a.report);
-  else requestReport(reportBox, m.missed);
+  else if (m.missed.length) requestReport(reportBox, m.missed); // nothing missed: nothing to diagnose
+}
+
+// Which drills fit the words the recognizer missed, by spelling alone (used when the model's report fails).
+function guessDrills(missed) {
+  const found = [];
+  const add = (id) => { if (!found.includes(id)) found.push(id); };
+  for (const raw of missed) {
+    const w = String(raw).toLowerCase().replace(/[^a-z']/g, ""); // "feel," and "milk." end in l and k
+    if (/th/.test(w)) add("th");
+    if (/[aeiou][td]+(er|y|le|ing|ed|a|o)\b/.test(w)) add("flap");
+    if (/[aeiou]r/.test(w)) add("r");
+    if (/(l|ed|ld|lt)$/.test(w)) add("l");
+  }
+  return found.slice(0, 2);
 }
 
 async function requestReport(box, missed) {
@@ -261,7 +320,10 @@ async function requestReport(box, missed) {
     };
     if (box.isConnected) paintReport(box, a.report);
   } catch (e) {
-    if (box.isConnected) fill(box, h("p", { class: "hint-line" }, aiErrorText(e)), h("button", { type: "button", class: "mini", onclick: () => requestReport(box, missed) }, t("chat.retry")));
+    if (e && e.code === "cancelled") return;
+    // No usable report (small models often fail here): point to drills for the missed words instead of an error.
+    a.report = { summary: t("check.fallback"), problems: [], drills: guessDrills(missed), encourage: "" };
+    if (box.isConnected) paintReport(box, a.report);
   }
 }
 

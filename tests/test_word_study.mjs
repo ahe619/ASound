@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { TOPICS, SCENARIOS, normalizeOptions, filterWords, chooseWords, gradeProgress, readStudyState, saveStudyState,
-  meaningChoices, spellingCorrect, answerProgress, isAlternativeSpelling, spellingClue } from "../app/js/word-study-core.js";
+  meaningChoices, spellingCorrect, answerProgress, isAlternativeSpelling, spellingClue, isAlternativeSaying,
+  sayCorrect, MAX_SPOKEN_RESPONSE_LENGTH } from "../app/js/word-study-core.js";
 
 const words = [
   { id: "ticket", term: "ticket", general: true, exams: ["cet4", "cet6"], topics: ["travel"], scenarios: ["transport"] },
@@ -146,6 +147,23 @@ test("multiple choice keeps one correct definition and up to three unique real d
   assert.equal(meaningChoices(target, pool.slice(0, 3)).length, 2);
 });
 
+test("distractors favour look-alike words and the same part of speech", () => {
+  const target = { id: "adapt", term: "adapt", meaning: "vt. 使适应" };
+  const pool = [target,
+    { id: "adopt", term: "adopt", meaning: "vt. 采纳" },
+    { id: "adept", term: "adept", meaning: "adj. 熟练的" },
+    { id: "run", term: "run", meaning: "vi. 跑" },
+    { id: "table", term: "table", meaning: "n. 桌子" },
+    { id: "happy", term: "happy", meaning: "adj. 快乐的" },
+    { id: "apple", term: "apple", meaning: "n. 苹果" }];
+  for (let seed = 0; seed < 5; seed++) {
+    let n = seed;
+    const result = ids(meaningChoices(target, pool, () => ((n = (n * 9301 + 49297) % 233280) / 233280)));
+    assert.ok(result.includes("adopt") && result.includes("adept"), result.join());
+    assert.ok(result.includes("run"), "a verb is preferred over nouns and adjectives: " + result.join());
+  }
+});
+
 test("spelling accepts case and boundary whitespace, without forgiving wrong letters or punctuation", () => {
   for (const answer of ["bridge", "BRIDGE", " BrIdGe  ", "\tbridge\n"]) assert.equal(spellingCorrect(answer, "bridge"), true);
   for (const answer of ["", "bridg", "bridges", "br idge", "bridge!", "bridge road"]) assert.equal(spellingCorrect(answer, "bridge"), false);
@@ -179,12 +197,35 @@ test("real dictionary alternatives are recognized without declaring target spell
     assert.equal(isAlternativeSpelling(target, word, bank), false);
     assert.equal(isAlternativeSpelling(`${alternative}!`, word, bank), false);
     assert.equal(isAlternativeSpelling("bridge", word, bank), false);
+    assert.equal(isAlternativeSaying(`I think the word is ${alternative}.`, word, bank), true);
+    assert.equal(isAlternativeSaying(`I think the word is ${target}.`, word, bank), false);
+    assert.equal(isAlternativeSaying("I think the word is bridge.", word, bank), false);
   }
   assert.deepEqual(spellingClue("clothes"), { first: "c", count: 7 });
   assert.deepEqual(spellingClue("colour"), { first: "c", count: 6 });
   assert.deepEqual(spellingClue("café"), { first: "c", count: 4 });
   assert.deepEqual(spellingClue("ice cream"), { first: "i", count: 8 });
   assert.deepEqual(spellingClue("I"), { first: "", count: 1 }, "a clue must not reveal a complete one-letter target");
+});
+
+test("spoken responses longer than typed spelling fields survive feedback and completed-session reloads", () => {
+  const storage = memory(), options = normalizeOptions({ practice: "say", deck: "cet4" });
+  const response = "I can see a bridge over the river and people who are enjoying a walk in the park. ".repeat(5);
+  assert.ok(response.length > 300 && response.length < MAX_SPOKEN_RESPONSE_LENGTH);
+  const attempt = { practice: "say", response, correct: sayCorrect(response, "bridge"), answeredAt: 100 };
+  const state = { options, progress: { bridge: answerProgress(null, attempt.correct, "say", 100) },
+    session: { ids: ["bridge"], index: 0, revealed: true, ratings: [], options, attempt, draft: "" } };
+  saveStudyState(state, storage);
+  assert.deepEqual(readStudyState(storage).session.attempt, attempt);
+  assert.equal(readStudyState(storage).progress.bridge.answers, 1);
+  state.session.index = 1; state.session.attempt = null;
+  state.session.ratings = [{ id: "bridge", rating: "good", ...attempt }];
+  saveStudyState(state, storage);
+  assert.equal(readStudyState(storage).session.ratings[0].response, response);
+  assert.equal(readStudyState(storage).session.ratings[0].correct, true);
+  state.session.draft = response;
+  saveStudyState(state, storage);
+  assert.equal(readStudyState(storage).session.draft, response);
 });
 
 test("quiz choices, typing draft and already-graded feedback restore atomically", () => {
@@ -212,4 +253,31 @@ test("legacy options still default to flashcards and objective fields are bounde
   const storage = memory();
   saveStudyState({ progress: { bridge: { seen: 2, answers: 2, correctAnswers: 999 } } }, storage);
   assert.equal(readStudyState(storage).progress.bridge.correctAnswers, 2);
+});
+
+test("say-it accepts the word inside a sentence and simple inflections, but not a different word", async () => {
+  const { sayCorrect, answerProgress } = await import("../app/js/word-study-core.js");
+  assert.equal(sayCorrect("Apple.", "apple"), true);
+  assert.equal(sayCorrect("I think it's an apple", "apple"), true);
+  assert.equal(sayCorrect("apples", "apple"), true);
+  assert.equal(sayCorrect("baking", "bake"), true);
+  assert.equal(sayCorrect("studied", "study"), true);
+  assert.equal(sayCorrect("ice cream", "ice cream"), true);
+  assert.equal(sayCorrect("ice-cream", "ice cream"), true);
+  assert.equal(sayCorrect("a pineapple", "apple"), false);
+  assert.equal(sayCorrect("map", "mop"), false);
+  assert.equal(sayCorrect("stopped", "stop"), true);
+  assert.equal(sayCorrect("boxes", "box"), true);
+  assert.equal(sayCorrect("photos", "photo"), true);
+  assert.equal(sayCorrect("potatoes", "potato"), true);
+  assert.equal(sayCorrect("dying", "die"), true);
+  assert.equal(sayCorrect("agreeing", "agree"), true);
+  assert.equal(sayCorrect("scared", "scar"), false);
+  assert.equal(sayCorrect("hoped", "hop"), false);
+  assert.equal(sayCorrect("bed", "be"), false);
+  assert.equal(sayCorrect("cares", "car"), false);
+  assert.equal(sayCorrect("", "apple"), false);
+  const progress = answerProgress({}, true, "say", 1000);
+  assert.equal(progress.lastPractice, "say");
+  assert.equal(progress.lastAnswerCorrect, true);
 });

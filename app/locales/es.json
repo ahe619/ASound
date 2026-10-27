@@ -444,5 +444,8 @@
   "native.send": "Ver en inglés",
   "native.needPack": "Para decirlo en voz alta, descarga “Ayuda en tu propio idioma” en Modelos y descargas. Por ahora puedes escribirlo.",
   "modes.title": "Más formas de practicar",
-  "modes.failed": "No se pudo iniciar este modo de práctica."
+  "modes.failed": "No se pudo iniciar este modo de práctica.",
+  "mic.err.noModel": "Para usar la voz necesitas el modelo de escucha (unos 32 MB). Abriendo las descargas…",
+  "mic.err.asrLoad": "El modelo de escucha no se cargó. Descárgalo de nuevo en Modelos y descargas.",
+  "check.fallback": "Practica las palabras que no se reconocieron: escúchalas y vuelve a leer el párrafo."
 }

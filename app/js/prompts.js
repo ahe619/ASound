@@ -10,6 +10,8 @@ const ownLang = () => (prefs.helpLang === "en" ? "their own language" : helpLang
 const lvl = (id) => { const l = levelById(id); return `Level ${l.id} of 5 (${l.key}, about CEFR ${l.cefr})`; };
 const q = (s) => JSON.stringify(String(s ?? ""));
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+// The 0.8B models (phones) lose track of long instructions: they get a short partner prompt and scripted openers.
+export const smallModel = () => /0\.8B|llm-cpu/i.test((window.ASoundAI && window.ASoundAI.modelId) || "");
 
 const STRICT_RULES = {
   gentle: "Only flag clear grammar mistakes and words that would confuse a listener.",
@@ -53,6 +55,14 @@ export function partnerPrompt(s) {
     ].filter(Boolean).join(" ");
   }
   else role = `Role-play: you are ${sc.role}`;
+  if (smallModel()) {
+    return [
+      role,
+      `You are talking with ${learner()} of English (${lvl(level.id)}).`,
+      "Reply like a real person in 1 or 2 short, natural spoken sentences: react to exactly what they just said, then ask one simple open question about it.",
+      "English only. No lists, no emoji. Never say you are an AI and never talk about languages.",
+    ].join("\n");
+  }
   return [
     `You are an American English conversation partner for ${learner()} who wants to sound like a native speaker.`,
     role,
@@ -136,7 +146,7 @@ export function feedbackPrompt(s, prev, said) {
     "The learner wants to sound like a native speaker of American English; base corrections on natural American usage.",
     "Rules:",
     "- Ignore punctuation, apostrophes and capitalization completely.",
-    "- If a word looks like the recognizer mishearing the learner (a real word that doesn't fit, such as \"sink\" for \"think\"), report it with type \"pronunciation\" and explain how to say the intended sound.",
+    "- If a word looks like the recognizer mishearing the learner (a real word that doesn't fit the sentence), report it with type \"pronunciation\" and explain how to say the intended sound.",
     "- \"corrected\" keeps the learner's own words wherever they are fine; change as little as possible.",
     `- At most 3 issues. Each explanation is one short sentence in ${helpLangName()}.`,
     "",
@@ -176,6 +186,7 @@ export function summaryPrompt(doc) {
   return [
     `You are an English speaking coach reviewing a practice conversation of ${learner()} (${lvl(doc.level)}).`,
     "The learner spoke through speech recognition, so ignore punctuation and capitalization.",
+    "Only the lines marked \"Learner:\" are the learner's. Never praise, correct or quote a \"Partner:\" line as if the learner said it.",
     "",
     "Transcript:",
     transcriptText(doc.turns.slice(-60)),

@@ -2,7 +2,7 @@
 import { prefs, state } from "./state.js";
 import { $, h } from "./util.js";
 import { setLanguage, applyI18n, t } from "./i18n.js";
-import { registerTab, registerTabCleanup, setTab, show, initNavigation } from "./nav.js";
+import { registerTab, registerTabCleanup, setTab, show, initNavigation, navigate, currentRoute } from "./nav.js";
 import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
@@ -33,6 +33,15 @@ function renderAll() {
   paintVocabCount();
 }
 
+// A reloaded chat whose session is not live yet opens on talk home. Record that in its history entry, so that
+// resuming the chat (at start-up or with the Resume button) is a real navigation rather than a no-op.
+function startNavigation() {
+  initNavigation();
+  if (state.tab === "talk" && state.talkView !== "chat" && currentRoute().talkView === "chat") {
+    navigate({ ...currentRoute(), talkView: "home" }, { replace: true });
+  }
+}
+
 async function boot() {
   initLayout();
   await Promise.all([setLanguage(prefs.uiLang), initModes()]);
@@ -52,12 +61,26 @@ async function boot() {
   initAccent();
   initSettings({ languageChanged: renderAll });
   onStoreChange((what) => {
-    if (what === "vocab") { paintVocabCount(); repaintSaveButtons(); if (state.tab === "vocab") renderVocab(); }
+    // Practice screens (word study, spoken review) repaint themselves; re-rendering the tab would remount them.
+    if (what === "vocab") { paintVocabCount(); repaintSaveButtons(); if (state.tab === "vocab" && !isVocabPracticing()) renderVocab(); }
     if (what === "sessions" && state.tab === "talk" && state.talkView === "home") renderTalkHome();
     if ((what === "profile" || what === "placements") && state.tab === "me") renderMe();
   });
 
-  await startEngines(renderModels);
+  // A hosted (https) web visit lands on word study, which needs no models: show it now and look at the model
+  // packs in the background. The desktop app (local http server) decides between setup and practice first.
+  const hosted = location.protocol === "https:" && !inAppShell;
+  const engines = startEngines(renderModels);
+  const landing = location.hash.slice(1); // read before navigation writes its own entry
+  const firstTab = ["talk", "accent", "vocab", "me"].includes(landing) ? landing : "vocab";
+  let landingState = null;
+  if (hosted) {
+    setTab(firstTab);
+    startNavigation();
+    landingState = history.state;
+  }
+  await engines;
+  if (hosted && state.tab === "models") renderModels(); // opened while the packs were still being checked
   // Only hosted web releases update themselves. Bundled desktop/mobile assets use package updates.
   initUpdates({
     enabled: packMode() === "web" && !inAppShell,
@@ -75,11 +98,24 @@ async function boot() {
     if (["accent", "vocab", "me"].includes(hash)) setTab(hash);
     show();
     warmUp();
-    if (window.ASoundMic && !deviceInfo().mobile) window.ASoundMic.preload();
+    // Load speech recognition once the first screen is up, not in the middle of it.
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+    if (window.ASoundMic && !deviceInfo().mobile) idle(() => window.ASoundMic.preload(), { timeout: 4000 });
   };
   // Web visitors can study words and use available system voices immediately.
   // Optional conversation resources remain accessible from the settings screen.
-  if (ready()) start();
+  if (hosted) {
+    if (ready()) {
+      // A conversation from the last half hour comes back, as before, unless the address named another tab or
+      // the learner has already moved on while the packs were checked.
+      if (state.tab === firstTab && history.state === landingState && !isVocabPracticing()
+          && !["accent", "vocab", "me"].includes(landing)) resumeIfRecent();
+      const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+      idle(() => warmUp(), { timeout: 4000 });
+      if (window.ASoundMic && !deviceInfo().mobile) idle(() => window.ASoundMic.preload(), { timeout: 4000 });
+    }
+  }
+  else if (ready()) start();
   else if (packMode() === "web") {
     const hash = location.hash.slice(1);
     setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
@@ -89,7 +125,7 @@ async function boot() {
     // Text vocabulary study does not require downloading or starting any AI model.
     if (location.hash.slice(1) === "vocab") setTab("vocab");
   }
-  initNavigation();
+  if (!hosted) startNavigation();
 }
 
 // Installed as a web app (https): keep the app itself available offline.

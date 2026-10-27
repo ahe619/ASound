@@ -444,5 +444,8 @@
   "native.send": "Englisch holen",
   "native.needPack": "Um es laut zu sagen, lade unter Modelle „Hilfe in deiner Sprache“ herunter. Tippen kannst du schon jetzt.",
   "modes.title": "Weitere Wege zum Üben",
-  "modes.failed": "Dieser Übungsmodus konnte nicht gestartet werden."
+  "modes.failed": "Dieser Übungsmodus konnte nicht gestartet werden.",
+  "mic.err.noModel": "Für Spracheingabe wird das Hörmodell (ca. 32 MB) benötigt. Downloads werden geöffnet…",
+  "mic.err.asrLoad": "Das Hörmodell konnte nicht geladen werden. Lade es unter Modelle & Downloads erneut herunter.",
+  "check.fallback": "Übe die Wörter, die nicht erkannt wurden: erst anhören, dann den Absatz noch einmal lesen."
 }

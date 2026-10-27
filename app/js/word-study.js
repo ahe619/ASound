@@ -1,14 +1,15 @@
 // Local word study: optional interests/situations, sourced exam decks, and saved recall progress.
-import { h, fill, icon, fmtIpa, str } from "./util.js";
+import { h, fill, icon, fmtIpa, str, toast } from "./util.js";
 import { t, addStrings, getLanguage } from "./i18n.js";
-import { speakBtn, stopSpeaking } from "./speech.js";
+import { speakBtn, stopSpeaking, speak, audioContext, prefetchSpeech } from "./speech.js";
+import { micButton, cancelMicButton } from "./mic.js";
 import { vocab } from "./store.js";
-import { createWordIllustration } from "./word-illustrations.js";
+import { createWordIllustration, warmPictures, preparePictures, hasPicture } from "./word-illustrations.js";
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
-  gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress,
-  isAlternativeSpelling, spellingClue,
+  gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress, sayCorrect,
+  isAlternativeSpelling, isAlternativeSaying, spellingClue, MAX_SPOKEN_RESPONSE_LENGTH,
 } from "./word-study-core.js";
 
 const DECKS = ["general", "cet4", "cet6", "kaoyan"];
@@ -24,8 +25,19 @@ let saved = null;
 let showingSetup = false;
 let storageFailed = false;
 let resumeDiscarded = false;
+const studyMics = new Set();
+function studyMic(options) {
+  const button = micButton(options);
+  studyMics.add(button);
+  return button;
+}
+function stopStudyCapture() {
+  for (const button of studyMics) cancelMicButton(button);
+  studyMics.clear();
+}
 
 registerTabDetail("vocab", (detail, { restore }) => {
+  if (detail !== "practice") { stopStudyCapture(); stopCompare(); }
   if (detail === null) detail = "setup";
   if (!["setup", "practice"].includes(detail)) return;
   showingSetup = detail === "setup";
@@ -45,10 +57,31 @@ function openPractice() {
 
 function backToSetup() {
   stopSpeaking();
+  stopCompare();
   goBack({ tab: "vocab", detail: "setup" });
 }
 
-window.addEventListener("pagehide", () => { generation++; stopSpeaking(); });
+let draftTimer = 0;
+function flushDraft() {
+  if (!draftTimer) return;
+  clearTimeout(draftTimer);
+  draftTimer = 0;
+  persist();
+}
+window.addEventListener("pagehide", () => { generation++; stopStudyCapture(); stopSpeaking(); stopCompare(); flushDraft(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushDraft(); }); // a phone switching apps
+
+// Keyboard on a computer: 1-4 (or A-D) pick an option or a rating, Space shows the answer, Enter goes on.
+document.addEventListener("keydown", event => {
+  if (!host?.isConnected || !host.getClientRects().length || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("input, textarea, select, [contenteditable]")) return;
+  const press = button => { if (button && !button.disabled) { event.preventDefault(); button.click(); } };
+  const key = event.key.toLowerCase();
+  const n = /^[1-9]$/.test(key) ? Number(key) - 1 : /^[a-d]$/.test(key) ? key.charCodeAt(0) - 97 : -1;
+  if (n >= 0) press(host.querySelectorAll(".ws-options button, .ws-grades button")[n]);
+  else if ((key === " " || key === "enter") && !target?.closest("button, a")) press(host.querySelector("#ws-next, .ws-reveal button"));
+});
 window.visualViewport?.addEventListener("resize", () => {
   if (host?.isConnected && host.contains(document.activeElement) && document.activeElement?.id === "ws-spelling") {
     keepVisible(document.activeElement);
@@ -56,8 +89,8 @@ window.visualViewport?.addEventListener("resize", () => {
 });
 
 // These also cover an unavailable feature dictionary on the first visit.
-addStrings("en", { "wstudy.loading": "Loading vocabulary…", "wstudy.loadFailed": "The word list could not be loaded. Check your connection and try again.", "wstudy.retry": "Try again" });
-addStrings("zh", { "wstudy.loading": "正在加载词库…", "wstudy.loadFailed": "词库暂时无法加载，请检查网络后重试。", "wstudy.retry": "重试" });
+addStrings("en", { "wstudy.loading": "Loading vocabulary\u2026", "wstudy.loadFailed": "The word list could not be loaded. Check your connection and try again.", "wstudy.retry": "Try again" });
+addStrings("zh", { "wstudy.loading": "\u6b63\u5728\u52a0\u8f7d\u8bcd\u5e93\u2026", "wstudy.loadFailed": "\u8bcd\u5e93\u6682\u65f6\u65e0\u6cd5\u52a0\u8f7d\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5\u3002", "wstudy.retry": "\u91cd\u8bd5" });
 
 function loadStyle() {
   if (!stylePromise) {
@@ -73,10 +106,25 @@ function loadStyle() {
   return stylePromise;
 }
 
+// General American transcriptions (vocabulary/ipa-us.json, from tools/american_ipa.py). The dictionary's own
+// transcriptions are mostly British; ASound teaches an American accent, so the American one is shown first.
+let usIpa = null;
+let usIpaPromise = null;
+function loadUsIpa() {
+  if (!usIpaPromise) {
+    usIpaPromise = fetch(new URL("../vocabulary/ipa-us.json", import.meta.url))
+      .then(res => (res.ok ? res.json() : null))
+      .then(doc => { usIpa = doc && doc.schemaVersion === 1 && doc.ipa ? doc.ipa : {}; })
+      .catch(() => { usIpa = {}; });
+  }
+  return usIpaPromise;
+}
+
 function loadAssets() {
   if (!assetsPromise) {
     assetsPromise = Promise.all([
       loadStyle(),
+      loadUsIpa(), // never rejects: a missing file only hides the American line
       fetch(new URL("../locales/feat/word-study.json", import.meta.url)).then(async res => {
         if (!res.ok) throw new Error("word-study strings unavailable");
         const strings = await res.json();
@@ -107,16 +155,16 @@ function validateSession(value) {
   return {
     ids: [...value.ids], index: value.index, revealed: !!value.revealed,
     ratings: ratings.map(entry => ({ ...entry })), choices, attempt,
-    draft: typeof value.draft === "string" ? value.draft.slice(0, 300) : "",
+    draft: typeof value.draft === "string" ? value.draft.slice(0, options.practice === "say" ? MAX_SPOKEN_RESPONSE_LENGTH : 300) : "",
     options, mode: value.mode === "review" ? "review" : "random",
   };
 }
 
 function validAttempt(attempt, word, practice) {
-  return !!word && ["choice", "spelling"].includes(practice) && attempt.practice === practice
+  return !!word && ["choice", "spelling", "say"].includes(practice) && attempt.practice === practice
     && typeof attempt.response === "string" && !!attempt.response.trim()
     && typeof attempt.correct === "boolean"
-    && attempt.correct === (practice === "spelling" ? spellingCorrect(attempt.response, word.term) : attempt.response === word.id);
+    && attempt.correct === judge(practice, attempt.response, word);
 }
 
 function validChoices(ids, word) {
@@ -136,6 +184,7 @@ function prepareQuestion() {
 }
 
 export async function renderWordStudy(root) {
+  preparePictures();
   if (host && host !== root) stopSpeaking();
   host = root;
   const mine = ++generation;
@@ -172,9 +221,11 @@ export async function renderWordStudy(root) {
 
 export function cleanupWordStudy() {
   generation++;
+  stopStudyCapture();
   host?.classList.remove("word-study");
   host = null;
   stopSpeaking();
+  stopCompare();
 }
 
 export function isWordStudyActive() {
@@ -187,6 +238,7 @@ function persist() {
 
 function paint(focusId = "") {
   if (!host?.isConnected || !saved || !bank) return;
+  stopStudyCapture();
   prepareQuestion();
   paintVersion++;
   const warning = storageFailed ? h("p", { class: "banner", role: "alert" }, t("wstudy.storageFailed")) : null;
@@ -307,7 +359,13 @@ function sourceDetails(deck) {
 }
 
 function begin(mode) {
-  const selected = chooseWords(bank.words, saved.options, { mode, progress: saved.progress });
+  // "Say it" is built around the picture cue: draw a new round from pictured words when there are enough.
+  let pool = bank.words;
+  if (saved.options.practice === "say" && mode === "random") {
+    const pictured = filterWords(bank.words, saved.options).filter(word => hasPicture(word));
+    if (pictured.length >= saved.options.size) pool = pictured;
+  }
+  const selected = chooseWords(pool, saved.options, { mode, progress: saved.progress });
   if (!selected.length) { paint(); return; }
   stopSpeaking();
   saved.session = { ids: selected.map(word => word.id), index: 0, revealed: false, ratings: [], options: { ...saved.options },
@@ -321,7 +379,7 @@ function begin(mode) {
 function sessionLabel(session) {
   return [t(`wstudy.deck.${session.options.deck}`), session.options.topic ? t(`wstudy.topic.${session.options.topic}`) : "",
     session.options.scenario ? t(`wstudy.scenario.${session.options.scenario}`) : "",
-    t(`wstudy.practice.${session.options.practice}`)].filter(Boolean).join(" · ");
+    t(`wstudy.practice.${session.options.practice}`)].filter(Boolean).join(" \u00b7 ");
 }
 
 function pronunciationButton(word) {
@@ -341,13 +399,27 @@ function cardView() {
   const session = saved.session;
   const index = session.index;
   const word = wordsById.get(session.ids[index]);
+  // Fetch this and the next two cards' pictures now, so a revealed card shows its picture without a wait.
+  warmPictures(session.ids.slice(index, index + 3).map(id => wordsById.get(id)).filter(Boolean));
+  // ...and this word's and the next word's audio, once the card is drawn, so "Listen" plays without a wait.
+  const soon = window.requestIdleCallback || (fn => setTimeout(fn, 300));
+  const paintedHost = host, paintedVersion = paintVersion;
+  soon(() => {
+    if (host !== paintedHost || !host?.isConnected || paintVersion !== paintedVersion || showingSetup
+        || saved?.session !== session || session.index !== index) return;
+    session.ids.slice(index, index + 2).forEach(id => wordsById.has(id) && prefetchSpeech(wordsById.get(id).term));
+  }, { timeout: 1500 });
   const collected = vocab.has(word.term);
   const fallback = session.options.practice === "choice" && session.choices.length < 2;
   const practice = fallback ? "cards" : session.options.practice;
   const answered = !!session.attempt;
-  const hideWord = practice === "spelling" && !answered;
+  const hideWord = (practice === "spelling" || practice === "say") && !answered;
   const revealed = practice === "cards" ? session.revealed : answered;
-  const pronunciation = word.ipa ? h("p", { class: "ipa" }, fmtIpa(word.ipa)) : null;
+  const us = usIpa && typeof usIpa[word.id] === "string" ? usIpa[word.id] : "";
+  const pronunciation = us
+    ? h("p", { class: "ipa ws-ipa" }, h("span", { class: "ws-ipa-tag" }, t("wstudy.ipaUs")), fmtIpa(us),
+      word.ipa ? h("span", { class: "ws-ipa-uk" }, t("wstudy.ipaUk"), " ", fmtIpa(word.ipa)) : null)
+    : word.ipa ? h("p", { class: "ipa" }, fmtIpa(word.ipa)) : null;
   const reveal = () => {
     if (!host?.isConnected || saved.session !== session || session.index !== index) return;
     session.revealed = true;
@@ -361,19 +433,20 @@ function cardView() {
     h("progress", { class: "ws-progress", max: session.ids.length, value: index, "aria-label": t("wstudy.progressLabel") }),
     h("p", { class: "ws-session-label" }, sessionLabel(session)),
     h("article", { class: `card ws-flashcard ws-practice-${practice}` },
-      h("p", { class: "mini-label" }, t(practice === "spelling" ? "wstudy.spellingPrompt" : practice === "choice" ? "wstudy.choicePrompt"
+      h("p", { class: "mini-label" }, t(practice === "say" ? "wstudy.sayPrompt" : practice === "spelling" ? "wstudy.spellingPrompt" : practice === "choice" ? "wstudy.choicePrompt"
         : session.mode === "review" ? "wstudy.reviewCard" : "wstudy.recallPrompt")),
-      hideWord ? h("h2", { id: "ws-word", class: "ws-question-title", tabindex: "-1" }, t("wstudy.spellingTitle"))
+      hideWord ? h("h2", { id: "ws-word", class: "ws-question-title", tabindex: "-1" }, t(practice === "say" ? "wstudy.sayTitle" : "wstudy.spellingTitle"))
         : h("h2", { id: "ws-word", class: "ws-word", lang: "en", tabindex: "-1" }, word.term),
       hideWord ? null : [pronunciation, pronunciationButton(word)],
       fallback ? h("p", { class: "note-card" }, t("wstudy.choiceFallback")) : null,
       practice === "choice" ? choiceQuestion(session, index, word) : null,
-      hideWord ? [h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), spellingQuestion(session, index, word)] : null,
+      hideWord && practice === "say" ? [createWordIllustration(word, { cue: true }), h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), sayQuestion(session, index, word)] : null,
+      hideWord && practice === "spelling" ? [h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), spellingQuestion(session, index, word)] : null,
       answered ? answerFeedback(session, word) : null,
       revealed ? h("div", { class: "ws-answer" },
         h("p", { id: "ws-meaning", tabindex: "-1", class: "ws-meaning", lang: "zh-CN" }, word.meaning),
         word.example ? h("p", { class: "ex", lang: "en" }, word.example) : null,
-        createWordIllustration(word),
+        createWordIllustration(word), // after "Say it" too: the picture with the word is what is remembered
         practice === "cards" ? h("p", { class: "hint-line" }, t("wstudy.rateHint")) : null) : practice === "cards"
         ? h("div", { class: "ws-reveal" }, h("p", { class: "hint-line" }, t("wstudy.recallHint")),
           h("button", { type: "button", class: "btn primary big", onclick: action(reveal) }, t("wstudy.reveal"))) : null),
@@ -423,12 +496,15 @@ function spellingQuestion(session, index, word) {
     "aria-describedby": "ws-spelling-target ws-spelling-hint", placeholder: t("wstudy.spellingPlaceholder") });
   input.value = session.draft || "";
   const submit = h("button", { type: "submit", class: "btn primary big", disabled: !input.value.trim() }, t("wstudy.submitAnswer"));
+  // Save the draft a moment after typing stops (every keystroke used to rewrite the whole study state).
   input.addEventListener("input", action(() => {
     session.draft = input.value;
     alternative.hidden = true;
     submit.disabled = !input.value.trim();
-    persist();
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => { draftTimer = 0; persist(); }, 400);
   }));
+  input.addEventListener("blur", flushDraft);
   input.addEventListener("focus", () => keepVisible(input));
   input.addEventListener("compositionstart", () => { composing = true; });
   input.addEventListener("compositionend", () => { composing = false; });
@@ -450,13 +526,18 @@ function submitAnswer(session, index, word, practice, response) {
       || session.options.practice !== practice || !response.trim()
       || (practice === "choice" && !session.choices.includes(response))) return;
   stopSpeaking();
-  if (practice === "spelling" && isAlternativeSpelling(response, word, bank.words)) {
+  if (practice === "say" && response.length > MAX_SPOKEN_RESPONSE_LENGTH) {
+    toast(t("wstudy.sayTooLong"));
+    return; // Do not grade an answer that cannot be saved intact.
+  }
+  if ((practice === "spelling" && isAlternativeSpelling(response, word, bank.words))
+      || (practice === "say" && isAlternativeSaying(response, word, bank.words))) {
     session.draft = response;
     persist();
-    paint("ws-spelling");
+    paint(practice === "say" ? "ws-say-input" : "ws-spelling");
     return;
   }
-  const correct = practice === "spelling" ? spellingCorrect(response, word.term) : response === word.id;
+  const correct = judge(practice, response, word);
   const answeredAt = Date.now();
   saved.progress[word.id] = answerProgress(saved.progress[word.id], correct, practice, answeredAt);
   session.attempt = { practice, response, correct, answeredAt };
@@ -466,11 +547,86 @@ function submitAnswer(session, index, word, practice, response) {
   paint("ws-feedback");
 }
 
+// How an answer is checked, per practice.
+function judge(practice, response, word) {
+  if (practice === "spelling") return spellingCorrect(response, word.term);
+  if (practice === "say") return sayCorrect(response, word.term);
+  return response === word.id;
+}
+
+// "Say it": the picture (when the word has one) and the meaning are the cue; the learner says the English word.
+let lastTake = null; // {wordId, audio: Float32Array 16 kHz} of the latest spoken answer, for "compare"
+function sayQuestion(session, index, word) {
+  const clue = spellingClue(word.term);
+  const alternative = h("p", { class: "note-card", role: "status", hidden: !isAlternativeSaying(session.draft, word, bank.words) },
+    t("wstudy.sayAlternative"));
+  const typed = h("input", { type: "text", id: "ws-say-input", class: "ws-spelling-input", autocomplete: "off", autocapitalize: "none", autocorrect: "off",
+    spellcheck: "false", lang: "en", maxlength: String(MAX_SPOKEN_RESPONSE_LENGTH), placeholder: t("wstudy.sayTypePlaceholder"), "aria-label": t("wstudy.sayTypePlaceholder") });
+  typed.value = session.draft || "";
+  typed.addEventListener("input", () => { alternative.hidden = true; });
+  const mic = studyMic({
+    big: true, label: t("wstudy.sayMic"),
+    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; },
+    onText: (heard) => submitAnswer(session, index, word, "say", heard),
+  });
+  return h("div", { class: "ws-say" },
+    h("p", { id: "ws-say-target", class: "hint-line" }, t(clue.first ? "wstudy.spellingClue" : "wstudy.spellingLength", clue)),
+    h("div", { class: "attempt-row" }, mic, h("span", { class: "hint-line" }, t("wstudy.sayHint"))),
+    alternative,
+    h("form", { class: "ws-say-type", onsubmit: action((event) => {
+      event.preventDefault();
+      if (typed.value.trim()) { lastTake = null; submitAnswer(session, index, word, "say", typed.value); }
+    }) }, typed, h("button", { type: "submit", class: "btn" }, t("wstudy.submitAnswer"))));
+}
+
+// After a wrong "Say it": say the word again right away (not scored; the answer above stands), as often as wanted.
+function sayAgain(word) {
+  const result = h("span", { class: "hint-line", role: "status" });
+  const mic = studyMic({
+    label: t("wstudy.sayAgain"),
+    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; document.getElementById("ws-compare")?.removeAttribute("hidden"); },
+    onText: (heard) => fill(result, icon(sayCorrect(heard, word.term) ? "check" : "close"), " ", t("wstudy.sayHeard"), " ",
+      h("span", { lang: "en" }, heard)),
+  });
+  mic.addEventListener("click", stopCompare, true); // the model's voice must not play into the new take
+  return h("div", { class: "attempt-row" }, mic, h("span", { class: "hint-line" }, t("wstudy.sayAgain")), result);
+}
+
+// Model, you, model: hear the American voice, your own take, then the model again.
+let compareRun = 0, takeSource = null;
+function stopCompare() {
+  compareRun++;
+  try { if (takeSource) takeSource.stop(); } catch {} // not started yet
+  takeSource = null;
+}
+function compareTake(word) {
+  const take = lastTake;
+  if (!take || take.wordId !== word.id) return;
+  stopCompare();
+  const run = compareRun, live = () => run === compareRun;
+  speak(word.term, null, 0.9, () => {
+    const ctx = audioContext();
+    if (!ctx || !live()) return;
+    const buffer = ctx.createBuffer(1, take.audio.length, 16000);
+    buffer.copyToChannel(take.audio, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.onended = () => setTimeout(() => { if (live()) { takeSource = null; speak(word.term, null, 0.9); } }, 250);
+    takeSource = source;
+    setTimeout(() => { if (live()) source.start(); }, 250);
+  });
+}
+
 function answerFeedback(session, word) {
   const attempt = session.attempt;
   return h("div", { class: `ws-feedback ${attempt.correct ? "is-correct" : "is-wrong"}`, id: "ws-feedback", role: "status", tabindex: "-1" },
     h("strong", null, icon(attempt.correct ? "check" : "close"), t(attempt.correct ? "wstudy.answerCorrect" : "wstudy.answerWrong")),
     attempt.practice === "spelling" ? h("p", null, t("wstudy.yourAnswer"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
+    attempt.practice === "say" ? h("p", null, t("wstudy.sayHeard"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
+    attempt.practice === "say" ? h("button", { type: "button", id: "ws-compare", class: "btn", hidden: !(lastTake && lastTake.wordId === word.id),
+      onclick: action(() => compareTake(word)) }, icon("speaker"), t("wstudy.compare")) : null,
+    attempt.practice === "say" && !attempt.correct ? sayAgain(word) : null,
     h("p", null, t("wstudy.correctAnswer"), " ", h("b", { lang: "en" }, word.term)),
     h("p", { class: "hint-line" }, t(attempt.correct ? "wstudy.correctReview" : "wstudy.wrongReview")));
 }
@@ -483,6 +639,7 @@ function continueAnswer(session, index, word) {
 
 function advance(session) {
   stopSpeaking();
+  stopCompare();
   session.index++;
   session.revealed = false;
   session.attempt = null;
@@ -500,6 +657,15 @@ function grade(session, index, word, rating) {
   advance(session);
 }
 
+function retry(session, words) {
+  stopSpeaking();
+  saved.options = { ...session.options };
+  saved.session = { ids: words.map(word => word.id), index: 0, revealed: false, ratings: [], options: { ...session.options },
+    choices: [], draft: "", attempt: null, mode: session.mode };
+  persist();
+  openPractice();
+}
+
 function finishedView() {
   const session = saved.session;
   const answers = session.ratings.filter(entry => typeof entry.correct === "boolean");
@@ -508,7 +674,9 @@ function finishedView() {
   const results = session.options.practice === "cards"
     ? RATINGS.map(rating => [session.ratings.filter(entry => entry.rating === rating).length, t(`wstudy.rating.${rating}`)])
     : [[correct, t("wstudy.resultCorrect")], [answers.length - correct, t("wstudy.resultWrong")],
-      [answers.length ? `${Math.round(correct / answers.length * 100)}%` : "—", t("wstudy.accuracy")]];
+      [answers.length ? `${Math.round(correct / answers.length * 100)}%` : "-", t("wstudy.accuracy")]];
+  const missed = [...new Set(session.ratings.filter(entry => entry.correct === false || entry.rating === "again").map(entry => entry.id))]
+    .map(id => wordsById.get(id)).filter(Boolean);
   return [
     h("section", { class: "card ws-finished" },
       h("div", { class: "ws-finished-mark", "aria-hidden": "true" }, icon("check")),
@@ -517,9 +685,18 @@ function finishedView() {
       h("p", { class: "hint-line" }, sessionLabel(session)),
       h("div", { class: "ws-results" }, results.map(([count, label]) => h("div", null, h("strong", null, count), h("span", null, label)))),
       session.options.practice !== "cards" && selfRated ? h("p", { class: "hint-line" }, t("wstudy.selfRatedCount", { n: selfRated })) : null,
-      h("p", { class: "hint-line" }, t("wstudy.nextReview"))),
+      h("p", { class: "hint-line" }, t("wstudy.nextReview")),
+      missed.length ? h("div", { class: "ws-missed" },
+        h("h2", null, t("wstudy.missedTitle")),
+        h("ul", null, missed.map(word => h("li", null,
+          h("b", { lang: "en" }, word.term),
+          h("span", { lang: "zh-CN" }, String(word.meaning || "").split("\n")[0]),
+          speakBtn(word.term, t("wstudy.listen")))))) : null),
     h("div", { class: "ws-start-actions" },
-      h("button", { type: "button", class: "btn primary big", onclick: action(() => { saved.options = { ...session.options }; begin("random"); }) }, t("wstudy.nextBatch")),
+      // Missed words right away, while the mistake is fresh (they also come back in later reviews).
+      missed.length ? h("button", { type: "button", class: "btn primary big", onclick: action(() => retry(session, missed)) },
+        t("wstudy.retryMissed", { n: missed.length })) : null,
+      h("button", { type: "button", class: `btn ${missed.length ? "" : "primary "}big`, onclick: action(() => { saved.options = { ...session.options }; begin("random"); }) }, t("wstudy.nextBatch")),
       h("button", { type: "button", class: "btn big", onclick: action(backToSetup) }, t("wstudy.changeOptions"))),
   ];
 }

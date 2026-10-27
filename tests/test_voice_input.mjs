@@ -7,7 +7,8 @@ const voiceSource = readFileSync(new URL("../app/js/voice-input.js", import.meta
 // mic.js has only these three import declarations; inject the UI helpers while executing its real logic.
 const controlsSource = readFileSync(new URL("../app/js/mic.js", import.meta.url), "utf8")
   .replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, "")
-  + "\nglobalThis.controls = { micButton, handsFree };";
+  .replace('import("./models.js")', "loadModels()")
+  + "\nglobalThis.controls = { micButton, handsFree, cancelMicButton };";
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const deferred = () => {
   let resolve, reject;
@@ -15,12 +16,14 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
-function fixture({ holdWorklet = false, holdResume = false } = {}) {
+function fixture({ holdWorklet = false, holdResume = false, engines = Promise.resolve(), configured = true, modelGate = null } = {}) {
   const permissions = [], contexts = [], nodes = [], workers = [], toasts = [], warnings = [], revoked = [];
+  let modelPages = 0, modelImports = 0;
   const worklet = deferred(), resume = deferred();
   const element = () => {
     const classes = new Set(), handlers = {}, attributes = {}, properties = {};
     return {
+      isConnected: true,
       classList: { toggle(name, value) { if (value) classes.add(name); else classes.delete(name); }, contains: (name) => classes.has(name) },
       style: { setProperty(name, value) { properties[name] = value; } },
       setAttribute(name, value) { attributes[name] = value; },
@@ -67,13 +70,18 @@ function fixture({ holdWorklet = false, holdResume = false } = {}) {
     AudioContext, AudioWorkletNode, Worker, URL: BrowserURL, Blob, Float32Array,
     console: { warn: (...args) => warnings.push(args) },
     h: element, icon: () => ({}), t: (key) => key, toast: (message) => toasts.push(message),
-    stopSpeaking() {}, unlockAudio() {},
+    stopSpeaking() {}, unlockAudio() {}, enginesApplied: engines,
+    async loadModels() {
+      modelImports++;
+      if (modelGate) await modelGate;
+      return { showModels() { modelPages++; } };
+    },
   });
   vm.runInContext("globalThis.window = globalThis;", context);
   vm.runInContext(voiceSource, context, { filename: "voice-input.js" });
   vm.runInContext(controlsSource, context, { filename: "mic.js" });
   const mic = context.ASoundMic;
-  mic.configure({ model: "test-english", base: "/" });
+  if (configured) mic.configure({ model: "test-english", base: "/" });
   const permit = (index = permissions.length - 1) => {
     const track = { stopped: false, stop() { this.stopped = true; } };
     const stream = { getTracks: () => [track], track };
@@ -86,8 +94,107 @@ function fixture({ holdWorklet = false, holdResume = false } = {}) {
     for (let i = 0; i < count; i++) node.port.onmessage({ data: new Float32Array(512).fill(amplitude) });
   };
   const utterance = () => { frames(20); frames(25, 0); };
-  return { mic, ...context.controls, permissions, contexts, nodes, workers, toasts, warnings, revoked, permit, frames, utterance, worklet, resume };
+  return { mic, ...context.controls, permissions, contexts, nodes, workers, toasts, warnings, revoked, permit, frames, utterance, worklet, resume,
+    modelPages: () => modelPages, modelImports: () => modelImports };
 }
+
+test("a tap while the packs are still being checked shows busy, then the next tap records", async () => {
+  const engines = deferred();
+  const f = fixture({ engines: engines.promise, configured: false });
+  const button = f.micButton({ onText() {} });
+  const tap = button.click();
+  assert.equal(button.classList.contains("busy"), true);
+  f.mic.configure({ model: "test-english", base: "/" });
+  engines.resolve();
+  await tap;
+  assert.equal(button.classList.contains("busy"), false);
+  assert.equal(f.permissions.length, 0, "the microphone is not opened after the wait, outside the tap");
+  const second = button.click();
+  f.permit();
+  await second;
+  assert.equal(button.classList.contains("rec"), true);
+  f.mic.close();
+});
+
+test("without a speech model a tap explains it and does not open the microphone", async () => {
+  const f = fixture({ configured: false });
+  const button = f.micButton({ onText() {} });
+  await button.click();
+  assert.deepEqual(f.toasts, ["mic.err.noModel"]);
+  assert.equal(f.permissions.length, 0);
+  assert.equal(button.classList.contains("busy"), false);
+  assert.equal(f.modelPages(), 1);
+});
+
+for (const cancel of ["second tap", "external cancel", "owned button cleanup"]) {
+  test(`waiting for model checks can be cancelled by ${cancel} without a later downloads redirect`, async () => {
+    const engines = deferred();
+    const f = fixture({ engines: engines.promise, configured: false });
+    const button = f.micButton();
+    const pending = button.click();
+    if (cancel === "second tap") await button.click();
+    else if (cancel === "external cancel") f.mic.cancel();
+    else f.cancelMicButton(button);
+    assert.equal(button.classList.contains("busy"), false);
+    engines.resolve(); await pending;
+    assert.deepEqual(f.toasts, []);
+    assert.equal(f.modelPages(), 0);
+    assert.equal(f.permissions.length, 0);
+  });
+}
+
+test("leaving a page while model checks are pending suppresses its later prompt and navigation", async () => {
+  const engines = deferred();
+  const f = fixture({ engines: engines.promise, configured: false });
+  const button = f.micButton();
+  const pending = button.click();
+  button.isConnected = false;
+  engines.resolve(); await pending;
+  assert.deepEqual(f.toasts, []);
+  assert.equal(f.modelPages(), 0);
+});
+
+test("cancelling during downloads-module import suppresses every stale UI effect", async () => {
+  const module = deferred();
+  const f = fixture({ configured: false, modelGate: module.promise });
+  const button = f.micButton();
+  const pending = button.click(); await flush();
+  assert.equal(f.modelImports(), 1);
+  await button.click();
+  module.resolve(); await pending;
+  assert.deepEqual(f.toasts, []);
+  assert.equal(f.modelPages(), 0);
+});
+
+test("hands-free model preparation can be stopped before it opens downloads", async () => {
+  const engines = deferred();
+  const f = fixture({ engines: engines.promise, configured: false });
+  const pending = f.handsFree.start({ onText() {} });
+  f.handsFree.stop();
+  engines.resolve();
+  assert.equal(await pending, false);
+  assert.deepEqual(f.toasts, []);
+  assert.equal(f.modelPages(), 0);
+  assert.equal(f.handsFree.on, false);
+});
+
+test("a later manual microphone owns cancellation while old model preparation settles", async () => {
+  const engines = deferred();
+  const f = fixture({ engines: engines.promise, configured: false });
+  const old = f.micButton();
+  const waiting = old.click();
+  const current = f.micButton({ lang: "zh" });
+  const recording = current.click();
+  f.permit(); await recording;
+  f.cancelMicButton(old);
+  engines.resolve(); await waiting;
+  assert.equal(current.classList.contains("rec"), true);
+  assert.equal(f.mic.status().mic, "recording");
+  assert.deepEqual(f.toasts, []);
+  assert.equal(f.modelPages(), 0);
+  f.cancelMicButton(current);
+  assert.equal(f.mic.status().mic, "off");
+});
 
 test("close stops a late permission result without reactivating capture", async () => {
   const f = fixture();
@@ -98,7 +205,8 @@ test("close stops a late permission result without reactivating capture", async 
   await rejected;
   assert.equal(stream.track.stopped, true);
   assert.equal(f.mic.status().mic, "off");
-  assert.equal(f.contexts.length, 0);
+  // The context is made inside the tap (Safari), before permission; cancelling must close it.
+  assert.ok(f.contexts.every((c) => c.closed));
 });
 
 test("cancel immediately releases tracks while the worklet is still loading", async () => {

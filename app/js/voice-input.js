@@ -99,14 +99,28 @@
   const clearFrames = () => Object.assign(mic, { frames: [], preroll: [], speaking: false, above: 0, below: 0 });
   const notifyCancel = (handlers) => { try { if (handlers && handlers.onCancel) handlers.onCancel(); } catch {} };
 
+  // The context runs at the device's own rate (44.1/48 kHz, 8 kHz on some headsets); the tap converts to 16 kHz:
+  // each output sample is the average of the input samples in its step (a simple low-pass), repeated when the
+  // device rate is lower.
   const WORKLET = `
     class Tap extends AudioWorkletProcessor {
-      constructor() { super(); this.buf = new Float32Array(${FRAME}); this.n = 0; }
+      constructor() {
+        super();
+        this.buf = new Float32Array(${FRAME}); this.n = 0;
+        this.step = sampleRate / ${RATE}; this.pos = 0; this.acc = 0; this.cnt = 0;
+      }
       process(inputs) {
         const ch = inputs[0] && inputs[0][0];
         if (ch) for (let i = 0; i < ch.length; i++) {
-          this.buf[this.n++] = ch[i];
-          if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+          this.acc += ch[i]; this.cnt++; this.pos += 1;
+          if (this.pos < this.step) continue;
+          const v = this.acc / this.cnt;
+          this.acc = 0; this.cnt = 0;
+          while (this.pos >= this.step) {
+            this.pos -= this.step;
+            this.buf[this.n++] = v;
+            if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice(0)); this.n = 0; }
+          }
         }
         return true;
       }
@@ -120,12 +134,16 @@
     const resources = { stream, ctx, src, node };
     opening.add(resources);
     try {
+      // Create and wake the audio context first, still inside the tap that started recording: Safari keeps a context
+      // made after the permission prompt suspended (silent recordings). Keep the device's own rate: Firefox cannot
+      // connect a microphone to a context with a different rate.
+      resources.ctx = ctx = new AudioContext();
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
       // Keep pending resources local: a late permission result must not overwrite a newer capture.
       resources.stream = stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       requireCapture(id);
-      resources.ctx = ctx = new AudioContext({ sampleRate: RATE });
       const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
       try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
       requireCapture(id);
@@ -195,6 +213,27 @@
     frames.forEach((f, i) => out.set(f, i * FRAME));
     return out;
   };
+  // Keep the part with speech, plus 250 ms each side. "Speech" = at least 60 ms (three 20 ms windows) louder than
+  // four times the background level (the quietest fifth of the recording), so one click cannot decide the cut.
+  function trimSilence(audio) {
+    const win = Math.round(0.02 * RATE), pad = Math.round(0.25 * RATE), run = 3;
+    const levels = [];
+    for (let i = 0; i + win <= audio.length; i += win) levels.push(rmsOf(audio.subarray(i, i + win)));
+    if (levels.length < 10) return audio;
+    const floor = [...levels].sort((a, b) => a - b)[Math.floor(levels.length * 0.2)];
+    const limit = Math.max(0.008, floor * 4);
+    const sustained = (i) => levels[i] > limit && levels[i + 1] > limit && levels[i + 2] > limit;
+    let first = -1, last = -1;
+    for (let i = 0; i + run <= levels.length; i++) if (sustained(i)) { first = i; break; }
+    for (let i = levels.length - run; i >= 0; i--) if (sustained(i)) { last = i + run - 1; break; }
+    if (first < 0) return audio; // nothing clearly spoken: let the recognizer decide
+    // Hysteresis: soft words at either end ("well...", "...I think") stay in while above a lower level.
+    const soft = Math.max(0.006, floor * 2);
+    while (first > 0 && levels[first - 1] > soft) first--;
+    while (last < levels.length - 1 && levels[last + 1] > soft) last++;
+    const start = Math.max(0, first * win - pad), end = Math.min(audio.length, (last + 1) * win + pad);
+    return end - start >= 0.5 * RATE ? audio.slice(start, end) : audio;
+  }
 
   function onFrame(f) {
     const rms = rmsOf(f);
@@ -254,6 +293,7 @@
     // the multilingual recognizer: transcribeNative(f32, "zh") for speech in the learner's own language
     configureHelp: (cfg) => help.configure(cfg),
     hasNative: () => !!help.config,
+    hasModel: () => !!asr.config, // false until a speech recognition pack is installed
     transcribeNative: (audio, lang) => help.transcribe(audio, lang),
     preload: () => loadASR().catch(() => {}),
     record: (handlers = {}) => startCapture(handlers, "recording"),
@@ -262,17 +302,23 @@
     async stop({ raw = false } = {}) {
       if (mic.state !== "recording") return { text: "", audio: null };
       const id = capture;
-      const audio = joinFrames(mic.frames);
+      let audio = joinFrames(mic.frames);
       mic.frames = [];
       mic.state = "paused";
       emit();
       requireCapture(id);
-      if (audio.length < 0.3 * RATE || raw) return { text: "", audio };
+      if (audio.length < 0.3 * RATE || raw) return { text: "", audio }; // raw: the whole recording (timed segments)
       const copy = audio.slice();
+      // Tap-to-talk records the pauses before and after speaking; the small recognizer often returns nothing for
+      // a short phrase surrounded by silence, so it first hears only the speech, then the whole clip if that is empty.
+      const speech = trimSilence(audio);
+      const kept = speech === audio ? copy : speech.slice(); // what is played back ("compare"): the speech only
       try {
-        const text = await transcribe(audio);
+        let text = await transcribe(speech);
         requireCapture(id);
-        return { text, audio: copy };
+        if (!text && speech !== audio) text = await transcribe(copy.slice());
+        requireCapture(id);
+        return { text, audio: kept };
       } catch (err) {
         if (id !== capture) throw aborted();
         throw err;

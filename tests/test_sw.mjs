@@ -32,10 +32,12 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
     windows: [{ id: "one", url: SCOPE }],
   };
   const context = {
-    URL, Request, Response, Date, Uint8Array, crypto: webcrypto, caches: storage,
+    URL, Request, Response, AbortController, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
+    Uint8Array, crypto: webcrypto, caches: storage,
     fetch: async (request) => {
       const relative = String(request.url || request).slice(SCOPE.length);
       env.fetched.push(relative);
+      if (env.interceptFetch) return env.interceptFetch(request);
       if (!(relative in env.files)) return new Response("missing", { status: 404 });
       return new Response(env.files[relative]);
     },
@@ -99,6 +101,133 @@ test("unchanged assets are reused from verified snapshots", async () => {
   assert.deepEqual(next.fetched, ["index.html"]);
   assert.equal(await (await next.get("runtime.wasm")).text(), "large unchanging runtime");
   assert.equal(next.skipped, 0);
+});
+
+test("on-demand assets are fetched on first use, verified, and kept for the next release", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "big runtime" };
+  const manifest = assets(files).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const old = worker("one", files, new CacheStorage(), manifest);
+  await old.dispatch("install");
+  assert.deepEqual(old.fetched, ["index.html"]);
+  old.files["vendor/runtime.wasm"] = "tampered runtime";
+  assert.equal((await old.get("vendor/runtime.wasm")).status, 503);
+  old.files["vendor/runtime.wasm"] = "big runtime";
+  assert.equal(await (await old.get("vendor/runtime.wasm")).text(), "big runtime");
+  const next = worker("two", { ...files, "index.html": "page two" }, old.storage,
+    assets({ ...files, "index.html": "page two" }).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a)));
+  await next.dispatch("install");
+  assert.deepEqual(next.fetched, ["index.html"]);
+  next.fetched = [];
+  assert.equal(await (await next.get("vendor/runtime.wasm")).text(), "big runtime");
+  assert.deepEqual(next.fetched, []);
+});
+
+test("an on-demand asset cached by the old release after the update was installed still works offline", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "big runtime" };
+  const lazy = (f) => assets(f).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const old = worker("one", files, new CacheStorage(), lazy(files));
+  await old.dispatch("install");
+  const next = worker("two", { ...files, "index.html": "page two" }, old.storage, lazy({ ...files, "index.html": "page two" }));
+  await next.dispatch("install");
+  assert.equal(await (await old.get("vendor/runtime.wasm")).text(), "big runtime"); // first use, still on the old release
+  next.files = {}; // offline
+  next.fetched = [];
+  assert.equal(await (await next.get("vendor/runtime.wasm")).text(), "big runtime");
+  assert.deepEqual(next.fetched, []);
+});
+
+test("an on-demand asset this device used is fetched at install when the update changes it", async () => {
+  const lazy = (f) => assets(f).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const files = { "index.html": "page", "vendor/runtime.js": "runtime one", "vendor/unused.wasm": "unused one" };
+  const old = worker("one", files, new CacheStorage(), lazy(files));
+  await old.dispatch("install");
+  await old.dispatch("activate");
+  assert.equal(await (await old.get("vendor/runtime.js")).text(), "runtime one"); // used online
+  const changed = { "index.html": "page two", "vendor/runtime.js": "runtime two", "vendor/unused.wasm": "unused two" };
+  const next = worker("two", changed, old.storage, lazy(changed));
+  await next.dispatch("install");
+  assert.deepEqual(next.fetched, ["index.html", "vendor/runtime.js"], "a file never used stays on demand");
+  await next.dispatch("activate");
+  next.files = {}; // the first launch of the update is offline
+  next.fetched = [];
+  assert.equal(await (await next.get("vendor/runtime.js")).text(), "runtime two");
+  assert.deepEqual(next.fetched, []);
+});
+
+test("a release that cached every file keeps a changed runtime offline after the update makes it on demand", async () => {
+  const files = { "index.html": "page", "kokoro/neural-tts.js": "tts one" };
+  const old = worker("one", files);
+  await old.dispatch("install");
+  await old.dispatch("activate");
+  const changed = { "index.html": "page two", "kokoro/neural-tts.js": "tts two" };
+  const next = worker("two", changed, old.storage, assets(changed).map((a) => (a.url.startsWith("kokoro/") ? { ...a, lazy: true } : a)));
+  await next.dispatch("install");
+  await next.dispatch("activate");
+  next.files = {};
+  assert.equal(await (await next.get("kokoro/neural-tts.js")).text(), "tts two");
+});
+
+test("activation keeps an on-demand asset that only a deleted release had cached", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "big runtime" };
+  const lazy = (f) => assets(f).map((a) => (a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5)); // distinct install times
+  const one = worker("one", files, new CacheStorage(), lazy(files));
+  await one.dispatch("install");
+  await one.dispatch("activate");
+  await tick();
+  const two = worker("two", { ...files, "index.html": "page two" }, one.storage, lazy({ ...files, "index.html": "page two" }));
+  await two.dispatch("install"); // waits, and is then replaced by three before it ever runs
+  await tick();
+  const three = worker("three", { ...files, "index.html": "page three" }, one.storage, lazy({ ...files, "index.html": "page three" }));
+  await three.dispatch("install");
+  assert.equal(await (await one.get("vendor/runtime.wasm")).text(), "big runtime"); // first use, still on release one
+  await three.dispatch("activate");
+  assert.deepEqual(one.storage.deleted, [prefix + "one"]);
+  three.files = {};
+  three.fetched = [];
+  assert.equal(await (await three.get("vendor/runtime.wasm")).text(), "big runtime");
+  assert.deepEqual(three.fetched, []);
+});
+
+test("an explicit runtime cancellation aborts its owned network request without publishing an incomplete entry", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "runtime" };
+  const w = worker("one", files, new CacheStorage(), assets(files).map(a => a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  await w.dispatch("install");
+  let networkSignal;
+  w.interceptFetch = request => {
+    networkSignal = request.signal;
+    return new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
+  };
+  const id = "runtime-request-0001";
+  const pending = w.dispatch("fetch", { clientId: "one", request: new Request(new URL("vendor/runtime.wasm", SCOPE), { headers: { "X-ASound-Runtime-Request": id } }) });
+  while (!networkSignal) await new Promise(resolve => setImmediate(resolve));
+  await w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId: id }, source: { id: "two", url: SCOPE }, ports: [] });
+  assert.equal(networkSignal.aborted, false, "a different client cannot cancel the request with the same ID");
+  await w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId: id }, source: w.windows[0], ports: [] });
+  assert.equal(networkSignal.aborted, true);
+  assert.equal((await pending).status, 503);
+  assert.equal(await (await w.storage.open(prefix + "one")).match(SCOPE + "vendor/runtime.wasm"), undefined);
+});
+
+test("early runtime cancellations are client-scoped, bounded, and expire before a later retry", async () => {
+  const files = { "index.html": "page", "vendor/runtime.wasm": "runtime" };
+  const w = worker("one", files, new CacheStorage(), assets(files).map(a => a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  await w.dispatch("install"); w.fetched.length = 0;
+  const cancel = (id, source = w.windows[0]) => w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId: id }, source, ports: [] });
+  const get = (id, clientId = "one") => w.dispatch("fetch", { clientId, request: new Request(new URL("vendor/runtime.wasm", SCOPE), { headers: { "X-ASound-Runtime-Request": id } }) });
+  const id = "early-runtime-request";
+  await cancel(id);
+  assert.equal((await get(id)).status, 503);
+  assert.deepEqual(w.fetched, [], "cancel-before-fetch must never start a network request");
+  assert.equal(await (await get(id, "two")).text(), "runtime", "another client with the same ID is unaffected");
+  w.storage.data.get(prefix + "one").delete(SCOPE + "vendor/runtime.wasm");
+  w.now = Date.now() + 61000;
+  assert.equal(await (await get(id)).text(), "runtime", "expired records must not block later requests");
+  w.storage.data.get(prefix + "one").delete(SCOPE + "vendor/runtime.wasm");
+  const first = "bounded-runtime-000";
+  await cancel(first);
+  for (let i = 1; i <= 128; i++) await cancel(`bounded-runtime-${String(i).padStart(3, "0")}`);
+  assert.equal(await (await get(first)).text(), "runtime", "oldest tombstone is evicted at the capacity bound");
 });
 
 test("activation requires one requesting app window and ignores other projects", async () => {

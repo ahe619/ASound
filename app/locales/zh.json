@@ -545,5 +545,8 @@
   "models.connectionNote": "连接正常后即可重试下载。",
   "models.webDownloadNote": "首次下载建议使用 Wi-Fi，并保持页面打开。下载中断后可选择继续下载。",
   "models.connectionOptions": "下载连接设置",
-  "models.sourceAndLicense": "来源与许可"
+  "models.sourceAndLicense": "来源与许可",
+  "mic.err.noModel": "语音功能需要先下载“听写”模型（约 32 MB），正在打开下载页面…",
+  "mic.err.asrLoad": "听写模型没能加载，请在“模型与下载”里重新下载。",
+  "check.fallback": "练一练没被识别出来的词：先听一遍，再把这段话读一次。"
 }
