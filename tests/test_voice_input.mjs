@@ -15,7 +15,7 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 
-function fixture({ holdWorklet = false, holdResume = false } = {}) {
+function fixture({ holdWorklet = false, holdResume = false, engines = Promise.resolve(), configured = true } = {}) {
   const permissions = [], contexts = [], nodes = [], workers = [], toasts = [], warnings = [], revoked = [];
   const worklet = deferred(), resume = deferred();
   const element = () => {
@@ -67,13 +67,13 @@ function fixture({ holdWorklet = false, holdResume = false } = {}) {
     AudioContext, AudioWorkletNode, Worker, URL: BrowserURL, Blob, Float32Array,
     console: { warn: (...args) => warnings.push(args) },
     h: element, icon: () => ({}), t: (key) => key, toast: (message) => toasts.push(message),
-    stopSpeaking() {}, unlockAudio() {}, enginesApplied: Promise.resolve(),
+    stopSpeaking() {}, unlockAudio() {}, enginesApplied: engines,
   });
   vm.runInContext("globalThis.window = globalThis;", context);
   vm.runInContext(voiceSource, context, { filename: "voice-input.js" });
   vm.runInContext(controlsSource, context, { filename: "mic.js" });
   const mic = context.ASoundMic;
-  mic.configure({ model: "test-english", base: "/" });
+  if (configured) mic.configure({ model: "test-english", base: "/" });
   const permit = (index = permissions.length - 1) => {
     const track = { stopped: false, stop() { this.stopped = true; } };
     const stream = { getTracks: () => [track], track };
@@ -88,6 +88,33 @@ function fixture({ holdWorklet = false, holdResume = false } = {}) {
   const utterance = () => { frames(20); frames(25, 0); };
   return { mic, ...context.controls, permissions, contexts, nodes, workers, toasts, warnings, revoked, permit, frames, utterance, worklet, resume };
 }
+
+test("a tap while the packs are still being checked shows busy, then the next tap records", async () => {
+  const engines = deferred();
+  const f = fixture({ engines: engines.promise, configured: false });
+  const button = f.micButton({ onText() {} });
+  const tap = button.click();
+  assert.equal(button.classList.contains("busy"), true);
+  f.mic.configure({ model: "test-english", base: "/" });
+  engines.resolve();
+  await tap;
+  assert.equal(button.classList.contains("busy"), false);
+  assert.equal(f.permissions.length, 0, "the microphone is not opened after the wait, outside the tap");
+  const second = button.click();
+  f.permit();
+  await second;
+  assert.equal(button.classList.contains("rec"), true);
+  f.mic.close();
+});
+
+test("without a speech model a tap explains it and does not open the microphone", async () => {
+  const f = fixture({ configured: false });
+  const button = f.micButton({ onText() {} });
+  await button.click();
+  assert.deepEqual(f.toasts, ["mic.err.noModel"]);
+  assert.equal(f.permissions.length, 0);
+  assert.equal(button.classList.contains("busy"), false);
+});
 
 test("close stops a late permission result without reactivating capture", async () => {
   const f = fixture();
