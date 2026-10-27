@@ -34,6 +34,7 @@ export const layoutInfo = () => ({
   layout: mode === "auto" ? layoutForWidth(globalThis.window?.innerWidth) : mode,
 });
 
+let lastHeight = 0;
 function applyLayout() {
   const info = layoutInfo();
   const root = globalThis.document?.documentElement;
@@ -46,7 +47,10 @@ function applyLayout() {
     // the visible height follows mobile browser bars and the on-screen keyboard.
     const height = viewport && Math.abs(viewport.scale - 1) < 0.01
       ? viewport.height : globalThis.window?.innerHeight;
-    if (Number.isFinite(height) && height > 0) root.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+    if (Number.isFinite(height) && height > 0 && Math.round(height) !== lastHeight) {
+      lastHeight = Math.round(height);
+      root.style.setProperty("--app-viewport-height", `${lastHeight}px`);
+    }
   }
   const signature = `${info.mode}:${info.layout}`;
   if (signature !== last) {
@@ -60,6 +64,7 @@ export function initLayout() {
   if (!initialized) {
     initialized = true;
     loadMode();
+    // Resize events come in bursts (keyboard opening, browser bars); applyLayout only writes what changed.
     globalThis.window?.addEventListener("resize", applyLayout);
     globalThis.window?.visualViewport?.addEventListener("resize", applyLayout);
     globalThis.window?.addEventListener("storage", event => {

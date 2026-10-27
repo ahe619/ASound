@@ -663,9 +663,12 @@ async function sendText(raw) {
   if (used.length) { el.append(usedChips(used)); renderSceneCard(); }
   thread().append(el);
   scrollThread(true);
+  // The partner's reply goes into the model queue first; the red-pen check runs after it, so the conversation
+  // never waits for a correction (on the small phone models a check can take 5-15 s).
+  const reply = requestReply();
   if (s.kind === "placement") { renderSceneCard(); paintChatLevel(); }
   else requestFeedback(turn);
-  await requestReply();
+  await reply;
   return true;
 }
 
@@ -891,7 +894,7 @@ async function toggleLive() {
       if (!sent) { handsFree.resume(); setLive("listening"); }
     },
     onState: (st) => setLive(st === "listening" && held ? "holding" : st),
-    onLevel: (v) => { liveBar.style.width = `${Math.round(v * 100)}%`; },
+    onLevel: (v) => { liveBar.style.transform = `scaleX(${v.toFixed(2)})`; }, // compositor-only, no layout per frame
   });
   if (ok) {
     prefs.handsFree = true;

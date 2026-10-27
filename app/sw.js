@@ -62,7 +62,8 @@ async function installRelease() {
       // should not fetch tens of megabytes it may never use. The fetch handler caches them, verified, on first use.
       if (!response && asset.lazy) continue;
       if (!response) {
-        response = await fetch(new Request(url, { cache: "no-store", credentials: "same-origin" }));
+        // no-cache: a conditional request, so files the page just loaded come back as 304 (still hash-checked)
+        response = await fetch(new Request(url, { cache: "no-cache", credentials: "same-origin" }));
         if (!response.ok || response.type === "opaque" || await digest(response) !== asset.sha256) {
           throw new Error(`The release file could not be verified: ${asset.url}`);
         }

@@ -41,7 +41,7 @@ self.onmessage = async (e) => {
       if (m.where) where = m.where;
       const t0 = performance.now();
       const mod = await import(BASE + "kokoro.web.js");
-      mod.env.wasmPaths = BASE + "ortlib/";
+      mod.env.wasmPaths = BASE + "../vendor/transformers/"; // the same ONNX runtime the speech recognizer uses
       tts = await mod.KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", { dtype: m.dtype, device: m.device });
       postMessage({ type: "ready", ms: Math.round(performance.now() - t0), device: m.device, dtype: m.dtype });
     } catch (err) {
