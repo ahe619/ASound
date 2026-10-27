@@ -548,6 +548,18 @@ function sayQuestion(session, index, word) {
     }) }, typed, h("button", { type: "submit", class: "btn" }, t("wstudy.submitAnswer"))));
 }
 
+// After a wrong "Say it": say the word again right away (not scored; the answer above stands), as often as wanted.
+function sayAgain(word) {
+  const result = h("span", { class: "hint-line", role: "status" });
+  const mic = micButton({
+    label: t("wstudy.sayAgain"),
+    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; },
+    onText: (heard) => fill(result, icon(sayCorrect(heard, word.term) ? "check" : "close"), " ", t("wstudy.sayHeard"), " ",
+      h("span", { lang: "en" }, heard)),
+  });
+  return h("div", { class: "attempt-row" }, mic, h("span", { class: "hint-line" }, t("wstudy.sayAgain")), result);
+}
+
 // Model, you, model: hear the American voice, your own take, then the model again.
 let compareRun = 0, takeSource = null;
 function stopCompare() {
@@ -582,6 +594,7 @@ function answerFeedback(session, word) {
     attempt.practice === "say" ? h("p", null, t("wstudy.sayHeard"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
     attempt.practice === "say" && lastTake && lastTake.wordId === word.id
       ? h("button", { type: "button", class: "btn", onclick: action(() => compareTake(word)) }, icon("speaker"), t("wstudy.compare")) : null,
+    attempt.practice === "say" && !attempt.correct ? sayAgain(word) : null,
     h("p", null, t("wstudy.correctAnswer"), " ", h("b", { lang: "en" }, word.term)),
     h("p", { class: "hint-line" }, t(attempt.correct ? "wstudy.correctReview" : "wstudy.wrongReview")));
 }

@@ -122,7 +122,8 @@
     "wstudy.sayHeard": "Heard:",
     "wstudy.compare": "Compare: model, you, model",
     "wstudy.missedTitle": "Words to look at again",
-    "wstudy.retryMissed": "Practice these {n} again"
+    "wstudy.retryMissed": "Practice these {n} again",
+    "wstudy.sayAgain": "Say it again (not scored)"
   },
   "zh": {
     "wstudy.loading": "正在加载词库…",
@@ -247,6 +248,7 @@
     "wstudy.sayHeard": "听到的是：",
     "wstudy.compare": "对比：示范、你、示范",
     "wstudy.missedTitle": "需要再看一遍的词",
-    "wstudy.retryMissed": "再练这 {n} 个词"
+    "wstudy.retryMissed": "再练这 {n} 个词",
+    "wstudy.sayAgain": "再说一次（不计分）"
   }
 }
