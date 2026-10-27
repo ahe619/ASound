@@ -30,6 +30,9 @@ export async function applyEngines() {
 export async function startEngines(onChange) {
   await initPacks().catch((e) => console.warn("model packs", e));
   await applyEngines();
-  onPacks(() => { applyEngines(); if (onChange) onChange(); });
+  // Downloads report progress many times a second; the models page needs at most a few redraws per second.
+  let pending = 0;
+  const redraw = () => { if (!onChange || pending) return; pending = setTimeout(() => { pending = 0; onChange(); }, 250); };
+  onPacks(() => { applyEngines(); redraw(); });
   document.addEventListener("asound:packs-chosen", applyEngines);
 }
