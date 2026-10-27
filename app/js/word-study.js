@@ -1,13 +1,14 @@
 // Local word study: optional interests/situations, sourced exam decks, and saved recall progress.
 import { h, fill, icon, fmtIpa, str } from "./util.js";
 import { t, addStrings, getLanguage } from "./i18n.js";
-import { speakBtn, stopSpeaking } from "./speech.js";
+import { speakBtn, stopSpeaking, speak, audioContext } from "./speech.js";
+import { micButton } from "./mic.js";
 import { vocab } from "./store.js";
-import { createWordIllustration, warmPictures, preparePictures } from "./word-illustrations.js";
+import { createWordIllustration, warmPictures, preparePictures, hasPicture } from "./word-illustrations.js";
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
-  gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress,
+  gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress, sayCorrect,
   isAlternativeSpelling, spellingClue,
 } from "./word-study-core.js";
 
@@ -128,10 +129,10 @@ function validateSession(value) {
 }
 
 function validAttempt(attempt, word, practice) {
-  return !!word && ["choice", "spelling"].includes(practice) && attempt.practice === practice
+  return !!word && ["choice", "spelling", "say"].includes(practice) && attempt.practice === practice
     && typeof attempt.response === "string" && !!attempt.response.trim()
     && typeof attempt.correct === "boolean"
-    && attempt.correct === (practice === "spelling" ? spellingCorrect(attempt.response, word.term) : attempt.response === word.id);
+    && attempt.correct === judge(practice, attempt.response, word);
 }
 
 function validChoices(ids, word) {
@@ -323,7 +324,13 @@ function sourceDetails(deck) {
 }
 
 function begin(mode) {
-  const selected = chooseWords(bank.words, saved.options, { mode, progress: saved.progress });
+  // "Say it" is built around the picture cue: draw a new round from pictured words when there are enough.
+  let pool = bank.words;
+  if (saved.options.practice === "say" && mode === "random") {
+    const pictured = filterWords(bank.words, saved.options).filter(word => hasPicture(word));
+    if (pictured.length >= saved.options.size) pool = pictured;
+  }
+  const selected = chooseWords(pool, saved.options, { mode, progress: saved.progress });
   if (!selected.length) { paint(); return; }
   stopSpeaking();
   saved.session = { ids: selected.map(word => word.id), index: 0, revealed: false, ratings: [], options: { ...saved.options },
@@ -363,7 +370,7 @@ function cardView() {
   const fallback = session.options.practice === "choice" && session.choices.length < 2;
   const practice = fallback ? "cards" : session.options.practice;
   const answered = !!session.attempt;
-  const hideWord = practice === "spelling" && !answered;
+  const hideWord = (practice === "spelling" || practice === "say") && !answered;
   const revealed = practice === "cards" ? session.revealed : answered;
   const us = usIpa && typeof usIpa[word.id] === "string" ? usIpa[word.id] : "";
   const pronunciation = us
@@ -383,19 +390,20 @@ function cardView() {
     h("progress", { class: "ws-progress", max: session.ids.length, value: index, "aria-label": t("wstudy.progressLabel") }),
     h("p", { class: "ws-session-label" }, sessionLabel(session)),
     h("article", { class: `card ws-flashcard ws-practice-${practice}` },
-      h("p", { class: "mini-label" }, t(practice === "spelling" ? "wstudy.spellingPrompt" : practice === "choice" ? "wstudy.choicePrompt"
+      h("p", { class: "mini-label" }, t(practice === "say" ? "wstudy.sayPrompt" : practice === "spelling" ? "wstudy.spellingPrompt" : practice === "choice" ? "wstudy.choicePrompt"
         : session.mode === "review" ? "wstudy.reviewCard" : "wstudy.recallPrompt")),
-      hideWord ? h("h2", { id: "ws-word", class: "ws-question-title", tabindex: "-1" }, t("wstudy.spellingTitle"))
+      hideWord ? h("h2", { id: "ws-word", class: "ws-question-title", tabindex: "-1" }, t(practice === "say" ? "wstudy.sayTitle" : "wstudy.spellingTitle"))
         : h("h2", { id: "ws-word", class: "ws-word", lang: "en", tabindex: "-1" }, word.term),
       hideWord ? null : [pronunciation, pronunciationButton(word)],
       fallback ? h("p", { class: "note-card" }, t("wstudy.choiceFallback")) : null,
       practice === "choice" ? choiceQuestion(session, index, word) : null,
-      hideWord ? [h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), spellingQuestion(session, index, word)] : null,
+      hideWord && practice === "say" ? [createWordIllustration(word, { cue: true }), h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), sayQuestion(session, index, word)] : null,
+      hideWord && practice === "spelling" ? [h("p", { class: "ws-meaning", lang: "zh-CN" }, spellingMeaning(word)), spellingQuestion(session, index, word)] : null,
       answered ? answerFeedback(session, word) : null,
       revealed ? h("div", { class: "ws-answer" },
         h("p", { id: "ws-meaning", tabindex: "-1", class: "ws-meaning", lang: "zh-CN" }, word.meaning),
         word.example ? h("p", { class: "ex", lang: "en" }, word.example) : null,
-        createWordIllustration(word),
+        practice === "say" ? null : createWordIllustration(word),
         practice === "cards" ? h("p", { class: "hint-line" }, t("wstudy.rateHint")) : null) : practice === "cards"
         ? h("div", { class: "ws-reveal" }, h("p", { class: "hint-line" }, t("wstudy.recallHint")),
           h("button", { type: "button", class: "btn primary big", onclick: action(reveal) }, t("wstudy.reveal"))) : null),
@@ -478,7 +486,7 @@ function submitAnswer(session, index, word, practice, response) {
     paint("ws-spelling");
     return;
   }
-  const correct = practice === "spelling" ? spellingCorrect(response, word.term) : response === word.id;
+  const correct = judge(practice, response, word);
   const answeredAt = Date.now();
   saved.progress[word.id] = answerProgress(saved.progress[word.id], correct, practice, answeredAt);
   session.attempt = { practice, response, correct, answeredAt };
@@ -488,11 +496,56 @@ function submitAnswer(session, index, word, practice, response) {
   paint("ws-feedback");
 }
 
+// How an answer is checked, per practice.
+function judge(practice, response, word) {
+  if (practice === "spelling") return spellingCorrect(response, word.term);
+  if (practice === "say") return sayCorrect(response, word.term);
+  return response === word.id;
+}
+
+// "Say it": the picture (when the word has one) and the meaning are the cue; the learner says the English word.
+let lastTake = null; // {wordId, audio: Float32Array 16 kHz} of the latest spoken answer, for "compare"
+function sayQuestion(session, index, word) {
+  const typed = h("input", { type: "text", class: "ws-spelling-input", autocomplete: "off", autocapitalize: "none", autocorrect: "off",
+    spellcheck: "false", lang: "en", maxlength: "300", placeholder: t("wstudy.sayTypePlaceholder"), "aria-label": t("wstudy.sayTypePlaceholder") });
+  const mic = micButton({
+    big: true, label: t("wstudy.sayMic"),
+    onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; },
+    onText: (heard) => submitAnswer(session, index, word, "say", heard),
+  });
+  return h("div", { class: "ws-say" },
+    h("div", { class: "attempt-row" }, mic, h("span", { class: "hint-line" }, t("wstudy.sayHint"))),
+    h("form", { class: "ws-say-type", onsubmit: action((event) => {
+      event.preventDefault();
+      if (typed.value.trim()) { lastTake = null; submitAnswer(session, index, word, "say", typed.value); }
+    }) }, typed, h("button", { type: "submit", class: "btn" }, t("wstudy.submitAnswer"))));
+}
+
+// Model, you, model: hear the American voice, your own take, then the model again.
+function compareTake(word) {
+  const take = lastTake;
+  if (!take || take.wordId !== word.id) return;
+  speak(word.term, null, 0.9, () => {
+    const ctx = audioContext();
+    if (!ctx) return;
+    const buffer = ctx.createBuffer(1, take.audio.length, 16000);
+    buffer.copyToChannel(take.audio, 0);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.onended = () => setTimeout(() => speak(word.term, null, 0.9), 250);
+    setTimeout(() => source.start(), 250);
+  });
+}
+
 function answerFeedback(session, word) {
   const attempt = session.attempt;
   return h("div", { class: `ws-feedback ${attempt.correct ? "is-correct" : "is-wrong"}`, id: "ws-feedback", role: "status", tabindex: "-1" },
     h("strong", null, icon(attempt.correct ? "check" : "close"), t(attempt.correct ? "wstudy.answerCorrect" : "wstudy.answerWrong")),
     attempt.practice === "spelling" ? h("p", null, t("wstudy.yourAnswer"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
+    attempt.practice === "say" ? h("p", null, t("wstudy.sayHeard"), " ", h("span", { lang: "en" }, attempt.response.trim())) : null,
+    attempt.practice === "say" && lastTake && lastTake.wordId === word.id
+      ? h("button", { type: "button", class: "btn", onclick: action(() => compareTake(word)) }, icon("speaker"), t("wstudy.compare")) : null,
     h("p", null, t("wstudy.correctAnswer"), " ", h("b", { lang: "en" }, word.term)),
     h("p", { class: "hint-line" }, t(attempt.correct ? "wstudy.correctReview" : "wstudy.wrongReview")));
 }

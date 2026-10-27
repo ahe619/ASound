@@ -9,7 +9,8 @@ const SCENARIO_IDS = new Set(SCENARIOS.map(v => v.id));
 const KEY = "asound.wordstudy.v1";
 const DAY = 86400000;
 const INTERVALS = [0, 1, 3, 7, 14, 30];
-export const PRACTICES = ["cards", "choice", "spelling"];
+export const PRACTICES = ["cards", "choice", "spelling", "say"];
+const ANSWERED = ["choice", "spelling", "say"]; // practices checked automatically (cards are self-rated)
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const finite = (value, fallback = 0) => Number.isFinite(value) ? value : fallback;
 const integer = (value, min, max) => Math.max(min, Math.min(max, Math.trunc(finite(value))));
@@ -28,6 +29,24 @@ export function normalizeOptions(value = {}) {
 const meaningKey = value => String(value || "").trim().replace(/\s+/g, " ").toLowerCase();
 export const normalizeSpelling = value => String(value ?? "").normalize("NFC").trim().toLowerCase();
 export const spellingCorrect = (answer, term) => !!normalizeSpelling(answer) && normalizeSpelling(answer) === normalizeSpelling(term);
+
+// "Say it": the recognizer's transcript must contain the word (or the phrase), allowing simple inflections of the
+// last word (books, watched, making...). Speech recognition hears "ice-cream" or "ice cream" alike.
+const sayWords = value => normalizeSpelling(value).replace(/[\u2019']/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+function inflected(heard, base) {
+  if (heard === base) return true;
+  const stem = base.endsWith("e") ? base.slice(0, -1) : base;
+  return [base + "s", base + "es", base + "ed", base + "d", base + "ing", stem + "ing", stem + "ed",
+    base.replace(/y$/, "ies"), base.replace(/y$/, "ied")].includes(heard);
+}
+export function sayCorrect(heard, term) {
+  const said = sayWords(heard), target = sayWords(term);
+  if (!said.length || !target.length) return false;
+  for (let i = 0; i + target.length <= said.length; i++) {
+    if (target.every((w, k) => (k === target.length - 1 ? inflected(said[i + k], w) : said[i + k] === w))) return true;
+  }
+  return false;
+}
 
 // A dictionary-backed alternative is a valid answer to an ambiguous definition,
 // but does not establish recall of the target word. Let the learner try again.
@@ -108,7 +127,7 @@ export function gradeProgress(previous, rating, now = Date.now()) {
 }
 
 export function answerProgress(previous, correct, practice, now = Date.now()) {
-  if (typeof correct !== "boolean" || !["choice", "spelling"].includes(practice)) throw new Error("Invalid exercise answer");
+  if (typeof correct !== "boolean" || !ANSWERED.includes(practice)) throw new Error("Invalid exercise answer");
   const old = object(previous) ? previous : {};
   const next = gradeProgress(old, correct ? "good" : "again", now);
   next.answers = integer(old.answers, 0, 999999) + 1;
@@ -119,7 +138,7 @@ export function answerProgress(previous, correct, practice, now = Date.now()) {
 }
 
 function cleanAttempt(value) {
-  if (!object(value) || !["choice", "spelling"].includes(value.practice) || typeof value.correct !== "boolean"
+  if (!object(value) || !ANSWERED.includes(value.practice) || typeof value.correct !== "boolean"
       || typeof value.response !== "string" || value.response.length > 300) return null;
   return { practice: value.practice, response: value.response, correct: value.correct, answeredAt: Math.max(0, finite(value.answeredAt)) };
 }

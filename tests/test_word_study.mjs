@@ -213,3 +213,20 @@ test("legacy options still default to flashcards and objective fields are bounde
   saveStudyState({ progress: { bridge: { seen: 2, answers: 2, correctAnswers: 999 } } }, storage);
   assert.equal(readStudyState(storage).progress.bridge.correctAnswers, 2);
 });
+
+test("say-it accepts the word inside a sentence and simple inflections, but not a different word", async () => {
+  const { sayCorrect, answerProgress } = await import("../app/js/word-study-core.js");
+  assert.equal(sayCorrect("Apple.", "apple"), true);
+  assert.equal(sayCorrect("I think it's an apple", "apple"), true);
+  assert.equal(sayCorrect("apples", "apple"), true);
+  assert.equal(sayCorrect("baking", "bake"), true);
+  assert.equal(sayCorrect("studied", "study"), true);
+  assert.equal(sayCorrect("ice cream", "ice cream"), true);
+  assert.equal(sayCorrect("ice-cream", "ice cream"), true);
+  assert.equal(sayCorrect("a pineapple", "apple"), false);
+  assert.equal(sayCorrect("map", "mop"), false);
+  assert.equal(sayCorrect("", "apple"), false);
+  const progress = answerProgress({}, true, "say", 1000);
+  assert.equal(progress.lastPractice, "say");
+  assert.equal(progress.lastAnswerCorrect, true);
+});

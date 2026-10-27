@@ -89,3 +89,6 @@
 .ws-ipa { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 4px 8px; }
 .ws-ipa-tag { font-size: 11px; font-weight: 700; color: var(--blue); background: var(--blue-soft); border-radius: 999px; padding: 0 7px; }
 .ws-ipa-uk { font-size: 12px; color: var(--muted); }
+.ws-say { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.ws-say-type { display: flex; gap: 8px; width: min(100%, 360px); }
+.ws-say-type input { flex: 1; min-width: 0; }

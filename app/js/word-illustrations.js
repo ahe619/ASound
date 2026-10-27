@@ -56,7 +56,7 @@ export async function pictureFor(word) {
 export const hasPicture = (word) => !!(pictures && word && pictures.get(word.id)?.term === word.term);
 
 // Start loading the index (cheap) so later checks are instant.
-export const preparePictures = () => { loadIndex(); };
+export const preparePictures = () => { loadIndex(); loadStyle().catch(() => {}); };
 
 // Fetch the next cards' pictures in the background so they appear without a wait.
 export async function warmPictures(words) {
@@ -73,12 +73,20 @@ export async function warmPictures(words) {
 }
 
 // A captioned figure for a revealed card; removes itself when the word has no picture.
-export function createWordIllustration(word) {
+// {cue: true}: the picture is the question ("say it"), so no caption that could give the word away.
+export function createWordIllustration(word, { cue = false } = {}) {
   if (!word || typeof word.id !== "string" || typeof word.term !== "string") return null;
   if (pictures && !pictures.has(word.id)) return null;
   const figure = document.createElement("figure");
   figure.className = "ws-illustration";
   figure.hidden = true;
+  // Known picture: keep its space from the start (no jump when it arrives) and fade it in.
+  const known = pictures?.get(word.id);
+  if (known && known.term === word.term) {
+    figure.hidden = false;
+    figure.classList.add("is-loading");
+    figure.style.setProperty("--ws-ratio", `${known.width} / ${known.height}`);
+  }
   loadIndex().then(async (entries) => {
     const entry = entries?.get(word.id);
     if (!figure.isConnected || !entry || entry.term !== word.term) { figure.remove(); return; }
@@ -95,16 +103,17 @@ export function createWordIllustration(word) {
       image.onerror = () => reject(new Error("illustration image unavailable"));
     });
     const caption = document.createElement("figcaption");
-    caption.textContent = lang === "zh" ? `图示含义：${entry.sense.zh}` : `Illustrated meaning: ${entry.sense.en}`;
+    caption.textContent = lang === "zh" ? `\u56fe\u793a\u542b\u4e49\uff1a${entry.sense.zh}` : `Illustrated meaning: ${entry.sense.en}`;
     const label = document.createElement("span");
     label.className = "ws-illustration-label";
-    label.textContent = lang === "zh" ? "AI 配图" : "AI illustration";
+    label.textContent = lang === "zh" ? "AI \u914d\u56fe" : "AI illustration";
     caption.append(label);
-    figure.append(image, caption);
+    if (cue) image.alt = lang === "zh" ? "\u63d0\u793a\u56fe\u7247" : "Picture clue";
+    figure.append(image, ...(cue ? [] : [caption]));
     image.src = imageURL(entry);
     try {
       await Promise.all([loaded, loadStyle()]);
-      if (figure.isConnected && image.naturalWidth > 0) figure.hidden = false;
+      if (figure.isConnected && image.naturalWidth > 0) { figure.hidden = false; figure.classList.remove("is-loading"); }
       else figure.remove();
     } catch { figure.remove(); }
   });

@@ -111,7 +111,16 @@
     "wstudy.accuracy": "Accuracy",
     "wstudy.selfRatedCount": "{n} words were reviewed as flashcards and are not included in quiz accuracy.",
     "wstudy.ipaUs": "US",
-    "wstudy.ipaUk": "UK"
+    "wstudy.ipaUk": "UK",
+    "wstudy.practice.say": "Say it",
+    "wstudy.practiceHint.say": "See the picture and the meaning, then say the word out loud in a short sentence. The listening model checks it.",
+    "wstudy.sayPrompt": "Say the English word",
+    "wstudy.sayTitle": "What is this in English?",
+    "wstudy.sayMic": "Tap and say the word",
+    "wstudy.sayHint": "Say it in a short sentence, like “It’s a ___.” or “I like to ___.” (single words are hard to hear). Tap again when done.",
+    "wstudy.sayTypePlaceholder": "or type it",
+    "wstudy.sayHeard": "Heard:",
+    "wstudy.compare": "Compare: model, you, model"
   },
   "zh": {
     "wstudy.loading": "正在加载词库…",
@@ -225,6 +234,15 @@
     "wstudy.accuracy": "正确率",
     "wstudy.selfRatedCount": "另有 {n} 个词通过翻卡完成，不计入选择题正确率。",
     "wstudy.ipaUs": "美",
-    "wstudy.ipaUk": "英"
+    "wstudy.ipaUk": "英",
+    "wstudy.practice.say": "开口说",
+    "wstudy.practiceHint.say": "看图和中文意思，用一个短句大声说出这个词，由听写模型判断。",
+    "wstudy.sayPrompt": "说出这个英文单词",
+    "wstudy.sayTitle": "这个用英文怎么说？",
+    "wstudy.sayMic": "点一下，说出单词",
+    "wstudy.sayHint": "用一个短句说出来，比如“It’s a ___.”或“I like to ___.”（单个单词不好识别），说完再点一下。",
+    "wstudy.sayTypePlaceholder": "也可以打字",
+    "wstudy.sayHeard": "听到的是：",
+    "wstudy.compare": "对比：示范、你、示范"
   }
 }
