@@ -366,6 +366,8 @@ mark.miss { background: transparent; color: var(--pen-red); text-decoration: und
 .voice-pill .meter i { background: var(--orange); }
 .llm-pill { left: auto; right: max(12px, env(safe-area-inset-right, 0px)); }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 60; max-width: calc(100% - 32px); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 14px; box-shadow: var(--shadow); }
+.speech-notice { position: fixed; z-index: 58; left: 50%; transform: translateX(-50%); bottom: calc(88px + env(safe-area-inset-bottom, 0px)); width: min(360px, calc(100% - 32px)); padding: 12px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; font-size: 14px; }
+.speech-notice .row { flex-wrap: wrap; }
 
 /* models & downloads */
 .sec-title { font-size: 17px; }

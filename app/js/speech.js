@@ -35,7 +35,7 @@ export function recommendVoices(f0, count = 3) {
   return [...VOICES].sort((a, b) => Math.abs(Math.log(a.f0 / f0)) - Math.abs(Math.log(b.f0 / f0))).slice(0, count);
 }
 
-const status = { engine: "", native: null, natural: "absent", browser: "off", error: "" };
+const status = { engine: "", native: null, natural: "absent", browser: "off", error: "", phase: "idle", waitingSince: 0 };
 const listeners = new Set();
 const emit = () => listeners.forEach((fn) => { try { fn({ ...status }); } catch {} });
 export const onSpeechStatus = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
@@ -48,6 +48,9 @@ let audioCtx = null;
 let active = [];          // playing AudioBufferSourceNodes
 let seq = 0;
 let speakingBtn = null;
+let playbackAbort = null;
+let currentPlayback = null;
+let playbackEngine = "";
 let unlocked = false;
 // Synthesized audio, least recently played first. "Listen" again (or the next card's word) plays at once instead
 // of being generated again; capped by total length (three minutes of speech, about 17 MB) for phones.
@@ -204,21 +207,33 @@ export function paintSpeak(btn, on) {
 
 export function stopSpeaking() {
   seq++;
+  playbackAbort?.abort();
+  playbackAbort = null;
+  currentPlayback = null;
+  playbackEngine = "";
   if (synth) synth.cancel();
   for (const s of active) { try { s.onended = null; s.stop(); } catch {} }
   active = [];
   paintSpeak(speakingBtn, false);
   speakingBtn = null;
+  status.phase = "idle";
+  status.waitingSince = 0;
+  status.error = "";
+  emit();
 }
 
 export const isSpeaking = () => !!speakingBtn || active.length > 0;
 
 // speak(text, button?, rateMultiplier?, onDone?, voiceId?) - plays sentence by sentence; the button shows play/stop.
-export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = null) {
+export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = null, engineOverride = "") {
   const clean = str(text);
   if (!clean) { onDone && onDone(); return; }
   stopSpeaking();
   const mine = seq;
+  playbackAbort = new AbortController();
+  currentPlayback = { text: clean, btn, rateMul, onDone, voiceId, engineOverride };
+  status.waitingSince = Date.now();
+  playbackPhase("preparing", mine);
   speakingBtn = btn;
   paintSpeak(btn, true);
   const rate = clamp(prefs.rate * rateMul, 0.5, 1.6);
@@ -230,10 +245,45 @@ export function speak(text, btn = null, rateMul = 1, onDone = null, voiceId = nu
     paintSpeak(speakingBtn, false);
     speakingBtn = null;
     active = [];
+    currentPlayback = null;
+    playbackAbort = null;
+    playbackPhase(status.error && !status.engine ? "error" : "idle", mine);
     document.dispatchEvent(new CustomEvent("asound:speech-end"));
     onDone && onDone();
   };
-  route(clean, mine, rate, voice, done);
+  route(clean, mine, rate, voice, done, engineOverride);
+}
+
+function playbackPhase(phase, mine) {
+  if (mine !== seq) return;
+  status.phase = phase;
+  if (["playing", "idle", "error"].includes(phase)) status.waitingSince = 0;
+  else if (!status.waitingSince) status.waitingSince = Date.now();
+  emit();
+}
+
+// A temporary choice for this utterance; the learner's saved voice stays intact.
+export function useBasicSpeechNow() {
+  const request = currentPlayback;
+  if (!request || !voiceCapabilities().systemEnglish) return;
+  unlockAudio();
+  speak(request.text, request.btn, request.rateMul, request.onDone, request.voiceId, "system");
+}
+
+// These short recordings use the same Kokoro voices. Choosing an example must not
+// require starting the model (or accidentally previewing the system voice on auto).
+export function previewVoice(voice = prefs.voice, btn = null) {
+  unlockAudio();
+  if (btn && speakingBtn === btn) { stopSpeaking(); return; }
+  speak("Hello! Let's practice English together.", btn, 1, null, voice, "preview");
+}
+
+export function voicePreviewBtn(voice = null, caption = "") {
+  const b = h("button", { type: "button", class: caption ? "btn speak" : "icon-btn sm speak",
+    "data-label": t("voice.preview"), "data-caption": caption || null });
+  paintSpeak(b, false);
+  b.addEventListener("click", (event) => { event.stopPropagation(); previewVoice(voice || prefs.voice, b); });
+  return b;
 }
 
 // Make the audio for a word or a short line ahead of time (the card on screen, the next card) so playing it starts
@@ -283,20 +333,34 @@ async function runAhead() {
   } finally { aheadBusy = false; }
 }
 
-async function route(text, mine, rate, voice, done) {
+async function route(text, mine, rate, voice, done, engineOverride = "") {
+  if (engineOverride === "preview") {
+    try {
+      playbackEngine = "preview";
+      await playAudio(text, mine, rate, voice, done, previewChunk);
+    } catch (error) {
+      if (mine !== seq) return;
+      status.engine = "";
+      status.error = t("speech.previewFailed");
+      done();
+    }
+    return;
+  }
   // System speech can start immediately even if a static host's health check is pending.
   loadSystemVoices();
   const initial = voiceCapabilities();
-  const quickSystem = prefs.voiceEngine === "system" || (prefs.voiceEngine === "auto" && initial.mobile && initial.systemEnglish);
+  const preference = engineOverride || prefs.voiceEngine;
+  const quickSystem = preference === "system" || (preference === "auto" && initial.mobile && initial.systemEnglish);
   if (!quickSystem && status.native === null) await healthCheck;
   if (mine !== seq) return;
   loadSystemVoices();
   const capabilities = voiceCapabilities();
-  const order = speechEngineOrder({ ...capabilities, preference: prefs.voiceEngine, natural: status.natural });
+  const order = speechEngineOrder({ ...capabilities, preference, natural: status.natural });
   if (capabilities.canNatural && prefs.voiceEngine === "natural" && status.natural !== "ready") startNatural();
   status.error = "";
   for (const engine of order) {
     try {
+      playbackEngine = engine;
       if (engine === "natural") await playAudio(text, mine, rate, voice, done, naturalChunk);
       else if (engine === "native") await playAudio(text, mine, rate, voice, done, nativeChunk);
       else if (engine === "browser") await playAudio(text, mine, rate, voice, done, browserChunk);
@@ -314,6 +378,18 @@ async function route(text, mine, rate, voice, done) {
   status.engine = "";
   emit();
   done();
+}
+
+function previewChunk(_text, _rate, voice) {
+  return shared(`preview|${voice}`, async () => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const response = await fetch(new URL(`../audio/voices/${voiceById(voice).id}.wav`, import.meta.url), { signal: ctl.signal });
+      if (!response.ok) throw new Error("voice preview unavailable");
+      return await ctx().decodeAudioData(await response.arrayBuffer());
+    } finally { clearTimeout(timer); }
+  });
 }
 
 function nativeChunk(text, rate, voice) {
@@ -359,19 +435,35 @@ async function browserChunk(text, rate, voice, mine) {
     browserModulePromise = import("../kokoro/neural-tts.js").then(mod => {
       browserMod = mod;
       if (voiceConfig && mod.configure) mod.configure(voiceConfig);
-      mod.onStatus((s) => { status.browser = s.state; emit(); });
+      mod.onStatus((s) => {
+        status.browser = s.state;
+        if (currentPlayback && playbackEngine === "browser" && status.phase !== "playing") {
+          if (s.state === "loading") playbackPhase("loading", seq);
+          else if (s.state === "ready") playbackPhase("generating", seq);
+        }
+        emit();
+      });
       return mod;
     }).catch(error => { browserModulePromise = null; throw error; });
   }
   await browserModulePromise;
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
   if (!voiceConfig) throw new Error(t("speech.voicePackRequired"));
-  const buf = await shared(`browser|${voice}|${rate}|${text}`, async () => {
-    const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate });
+  const key = `browser|${voice}|${rate}|${text}`;
+  const signal = deviceInfo().mobile && mine === seq ? playbackAbort?.signal : undefined;
+  if (currentPlayback && mine === seq && status.phase !== "playing") {
+    playbackPhase(status.browser === "ready" ? "generating" : "loading", mine);
+  }
+  const make = async () => {
+    const { pcm, sr } = await browserMod.synthesize(text, { voice, speed: rate, signal });
+    if (signal?.aborted) throw new Error("speech cancelled");
     const out = ctx().createBuffer(1, pcm.length, sr);
     out.copyToChannel(pcm, 0);
     return out;
-  });
+  };
+  // A cancelled mobile tap must not leave the next tap sharing a rejected request.
+  // Desktop prefetch retains its shared work; mobile has no speculative prefetch.
+  const buf = signal ? cachedAudio(key) || keepAudio(key, await make()) : await shared(key, make);
   if (mine !== undefined && mine !== seq) throw new Error("speech cancelled");
   return buf;
 }
@@ -382,23 +474,36 @@ async function playAudio(text, mine, rate, voice, done, chunk) {
   const a = ctx();
   if (!a) throw new Error("audio is not available");
   // (the natural engine is slower, so it also goes sentence by sentence)
-  const parts = chunk === nativeChunk && text.length <= 600 ? [text] : sentences(text);
-  let at = 0, last = null;
+  const parts = chunk === previewChunk || (chunk === nativeChunk && text.length <= 600) ? [text] : sentences(text);
+  let at = 0, complete = false;
   for (const part of parts) {
     if (mine !== seq) return;
     const buf = await chunk(part, rate, voice, mine);
     if (mine !== seq) return;
+    if (a.state !== "running") await a.resume();
+    if (mine !== seq) return;
+    if (a.state !== "running") throw new Error("audio playback is paused");
     const src = a.createBufferSource();
     src.buffer = buf;
     src.connect(a.destination);
+    src.onended = () => {
+      if (mine !== seq) return;
+      active = active.filter(source => source !== src);
+      if (!active.length) {
+        if (complete) done();
+        else playbackPhase("generating", mine);
+      }
+    };
     const start = Math.max(a.currentTime + 0.03, at);
     src.start(start);
+    status.engine = playbackEngine;
+    status.error = "";
+    playbackPhase("playing", mine);
     at = start + buf.duration;
     active.push(src);
-    last = src;
   }
-  if (!last) { done(); return; }
-  last.onended = done;
+  complete = true;
+  if (!active.length) done();
 }
 
 function playSystem(text, mine, rate, done) {
@@ -411,6 +516,7 @@ function playSystem(text, mine, rate, done) {
       const u = new SpeechSynthesisUtterance(p);
       if (voice) { u.voice = voice; u.lang = voice.lang; } else u.lang = "en-US";
       u.rate = rate;
+      u.onstart = () => { if (mine === seq) { status.error = ""; playbackPhase("playing", mine); } };
       u.onerror = () => {
         if (mine !== seq) return;
         synth.cancel();

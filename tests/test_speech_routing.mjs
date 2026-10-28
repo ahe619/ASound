@@ -8,13 +8,14 @@ const source = readFileSync(new URL("../app/js/speech.js", import.meta.url), "ut
   .replace(/^import .*;\r?\n/gm, "")
   .replace(/^export /gm, "")
   .replace('import("../kokoro/neural-tts.js")', "loadBrowserModule()")
-  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp, prefetchSpeech };";
+  .replaceAll("import.meta.url", JSON.stringify("https://app.test/js/speech.js"))
+  + "\nglobalThis.speech = { speechEngineOrder, voiceCapabilities, configureVoice, speak, previewVoice, useBasicSpeechNow, stopSpeaking, renderSpeech, recheckSpeech, startNatural, speechStatus, onSpeechStatus, warmUp, prefetchSpeech };";
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 const en = { name: "English", lang: "en-US" };
 
 function fixture({ mobile = true, preference = "auto", voices = [en], system = true,
-  health = null, search = "", failStart = false, healthGate = null, browserGate = null, synthesisGate = null } = {}) {
-  const requests = [], utterances = [], sources = [], timers = new Map(), listeners = {}, synthesized = [];
+  health = null, search = "", failStart = false, healthGate = null, browserGate = null, synthesisGate = null, parts = null } = {}) {
+  const requests = [], utterances = [], sources = [], timers = new Map(), listeners = {}, synthesized = [], signals = [];
   let serial = 0, imports = 0, syntheses = 0, currentVoices = voices, currentHealth = health;
   const prefs = { voiceEngine: preference, voice: "af_heart", rate: 1 };
   const buffer = () => ({ length: 80, duration: 0.01, sampleRate: 24000,
@@ -36,9 +37,9 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
     prefs, location: { search }, deviceInfo: () => ({ mobile }), AudioContext,
     ...(system ? { speechSynthesis: synth } : {}),
     SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } },
-    h() {}, icon() {}, str: value => String(value || ""), sentences: text => [text],
+    h() {}, icon() {}, str: value => String(value || ""), sentences: text => parts || [text],
     clamp: (value, low, high) => Math.max(low, Math.min(high, value)), t: key => key,
-    URLSearchParams, AbortController, Float32Array, CustomEvent: class {},
+    URL, URLSearchParams, AbortController, Float32Array, CustomEvent: class {},
     document: { dispatchEvent() {} }, console: { warn() {} },
     setTimeout(fn, delay) {
       const id = ++serial;
@@ -58,16 +59,17 @@ function fixture({ mobile = true, preference = "auto", voices = [en], system = t
     async loadBrowserModule() {
       imports++;
       if (browserGate) await browserGate;
-      return { configure() {}, onStatus() {}, async synthesize(text) {
+      return { configure() {}, onStatus() {}, async synthesize(text, options) {
+        signals.push(options?.signal);
         syntheses++; synthesized.push(text);
-        if (synthesisGate) await synthesisGate;
+        if (synthesisGate) await (typeof synthesisGate === "function" ? synthesisGate(text) : synthesisGate);
         return { pcm: new Float32Array(80), sr: 24000 };
       } };
     },
   });
   vm.runInContext("globalThis.window = globalThis;", context);
   vm.runInContext(source, context, { filename: "speech.js" });
-  return { ...context.speech, prefs, requests, utterances, sources, timers,
+  return { ...context.speech, prefs, requests, utterances, sources, timers, signals,
     imports: () => imports, syntheses: () => syntheses, synthesized: () => [...synthesized],
     setHealth: value => { currentHealth = value; },
     setVoices(value) { currentVoices = value; listeners.voiceschanged?.(); },
@@ -407,4 +409,77 @@ test("speech completion fires once even if a system error is followed by an end 
   f.utterances[0].onerror(); f.utterances[0].onend();
   assert.equal(done, 1);
   assert.equal(f.speechStatus().engine, "");
+});
+
+test("voice previews play the selected recording without loading the model, even on automatic", async () => {
+  const f = fixture({ preference: "auto" });
+  f.configureVoice({ mode: "web" }); await flush();
+  f.previewVoice("am_michael"); await flush();
+  assert.equal(f.speechStatus().phase, "playing");
+  assert.equal(f.speechStatus().engine, "preview");
+  assert.equal(f.imports(), 0);
+  assert.equal(f.syntheses(), 0);
+  assert.ok(f.requests.some(r => String(r.path) === "https://app.test/audio/voices/am_michael.wav"));
+  assert.equal(f.sources.length, 1);
+  const requests = f.requests.length;
+  f.previewVoice("am_michael"); await flush();
+  assert.equal(f.requests.length, requests, "replay uses the decoded short recording");
+  f.sources.at(-1).onended();
+  assert.equal(f.speechStatus().phase, "idle");
+});
+
+test("a new mobile tap cancels the old request without sharing its aborted signal", async () => {
+  let release;
+  const f = fixture({ preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  f.speak("apple"); await flush();
+  assert.equal(f.speechStatus().phase, "loading");
+  const old = f.signals[0];
+  f.speak("apple"); await flush();
+  assert.equal(old.aborted, true);
+  assert.notEqual(f.signals[1], old);
+  assert.equal(f.signals[1].aborted, false);
+  release(); await flush();
+  assert.equal(f.sources.length, 1, "only the current tap plays");
+  assert.equal(f.speechStatus().phase, "playing");
+});
+
+test("basic read aloud can replace a slow natural reading without changing the saved choice", async () => {
+  let release;
+  const f = fixture({ preference: "standard", synthesisGate: new Promise(resolve => { release = resolve; }) });
+  f.configureVoice({ mode: "web" }); await flush();
+  let done = 0;
+  f.speak("Hello.", null, 1, () => done++); await flush();
+  f.useBasicSpeechNow(); await flush();
+  assert.equal(f.signals[0].aborted, true);
+  assert.equal(f.prefs.voiceEngine, "standard");
+  const utterance = f.utterances.find(u => u.text === "Hello.");
+  assert.ok(utterance);
+  utterance.onstart();
+  assert.equal(f.speechStatus().phase, "playing");
+  release(); await flush();
+  assert.equal(f.sources.length, 0, "obsolete natural voice never plays over the basic reading");
+  utterance.onend();
+  assert.equal(done, 1);
+  assert.equal(f.speechStatus().phase, "idle");
+});
+
+test("a gap between generated sentences restores waiting feedback until the next audio starts", async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = fixture({ preference: "standard", parts: ["First.", "Second."],
+    synthesisGate: text => text === "Second." ? gate : undefined });
+  f.configureVoice({ mode: "web" }); await flush();
+  let done = 0;
+  f.speak("First. Second.", null, 1, () => done++); await flush();
+  assert.equal(f.speechStatus().phase, "playing");
+  f.sources[0].onended();
+  assert.equal(f.speechStatus().phase, "generating");
+  assert.ok(f.speechStatus().waitingSince > 0);
+  assert.equal(done, 0);
+  release(); await flush();
+  assert.equal(f.speechStatus().phase, "playing");
+  f.sources[1].onended();
+  assert.equal(f.speechStatus().phase, "idle");
+  assert.equal(done, 1);
 });

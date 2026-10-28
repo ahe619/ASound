@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:,">
+  <title>检查网站更新 · ASound</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.6 system-ui, sans-serif; color: #202b36; background: #f4f6f8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+    main { max-width: 600px; margin: 4vh auto; padding: 24px; border: 1px solid #dce2e8; border-radius: 16px; background: #fff; }
+    h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    p { margin: 8px 0 20px; }
+    .hint, dt { color: #536170; }
+    dl { margin: 24px 0; }
+    dt { margin-top: 12px; }
+    dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+    #status { min-height: 3.2em; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    button, .home { min-height: 44px; padding: 9px 14px; border: 1px solid #b7c3ce; border-radius: 8px; font: inherit; }
+    button { cursor: pointer; background: #fff; color: inherit; }
+    button:disabled { cursor: default; opacity: .55; }
+    #apply { border-color: #135f9f; background: #135f9f; color: #fff; }
+    button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #55a4df; outline-offset: 3px; }
+    details { margin: 24px 0 12px; }
+    summary { cursor: pointer; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, monospace; }
+    .home { display: inline-block; border: 0; color: #135f9f; }
+    @media (prefers-color-scheme: dark) {
+      :root { color: #e7edf3; background: #131a22; }
+      main { background: #1b2530; border-color: #394957; }
+      .hint, dt { color: #b4c1ce; }
+      button { background: #253442; border-color: #667b8e; }
+      .home { color: #89c7ff; }
+    }
+    @media (max-width: 360px) { main { padding: 18px; } .actions button { width: 100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>检查网站更新</h1>
+    <p class="hint">此页面只检查网站版本，不加载学习与语音功能。</p>
+    <dl>
+      <dt>当前版本</dt><dd id="current">正在读取…</dd>
+      <dt>可用更新</dt><dd id="next">尚未检查</dd>
+    </dl>
+    <p id="status" role="status" aria-live="polite">正在读取当前版本…</p>
+    <div class="actions">
+      <button id="check" type="button" disabled>检查更新</button>
+      <button id="apply" type="button" disabled>更新并打开网站</button>
+    </div>
+    <details><summary>浏览器信息</summary><pre id="browser"></pre></details>
+    <button id="copy" type="button">复制检查结果</button>
+    <a id="home" class="home" href="./#accent">打开网站</a>
+  </main>
+  <script>
+    (() => {
+      // repair.html sits beside sw.js, including when the site has a project subpath.
+      const root = new URL('./', location.href);
+      const workerURL = new URL('sw.js', root);
+      const homeURL = new URL('#accent', root);
+      const $ = id => document.getElementById(id);
+      let registration = null, busy = false, checked = false;
+      let currentVersion = '', nextVersion = '';
+      $('home').href = homeURL.href;
+      $('browser').textContent = navigator.userAgent;
+      const supported = window.isSecureContext && 'serviceWorker' in navigator;
+      function status(text) { $('status').textContent = text; }
+      function buttons() {
+        $('check').disabled = busy || !supported;
+        $('apply').disabled = busy || !checked || !(registration?.waiting || registration?.active);
+      }
+      function timeout(promise, ms, text) {
+        let timer;
+        return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(text)), ms); })])
+          .finally(() => clearTimeout(timer));
+      }
+      function message(worker, type, ms = 5000) {
+        return new Promise((resolve, reject) => {
+          const channel = new MessageChannel();
+          const finish = (error, data) => {
+            clearTimeout(timer); channel.port1.close(); channel.port2.close();
+            if (error) reject(error); else resolve(data);
+          };
+          const timer = setTimeout(() => finish(new Error('更新程序暂未响应，请重新检查。')), ms);
+          channel.port1.onmessage = event => finish(null, event.data);
+          try { worker.postMessage({ type }, [channel.port2]); } catch (error) { finish(error); }
+        });
+      }
+      function controller() {
+        const worker = navigator.serviceWorker.controller;
+        return worker?.scriptURL === workerURL.href ? worker : null;
+      }
+      async function ownRegistration() {
+        const found = await timeout(navigator.serviceWorker.getRegistration(root.href), 10000, '读取更新状态超时，请重试。');
+        return found?.scope === root.href ? found : null;
+      }
+      async function version(worker) {
+        const info = await message(worker, 'ASOUND_VERSION');
+        if (!info || typeof info.version !== 'string' || !info.version) throw new Error('无法读取网站版本，请重新检查。');
+        return info.version;
+      }
+      async function readVersions() {
+        const active = controller();
+        let readable = true;
+        currentVersion = '';
+        if (active) {
+          try { currentVersion = await version(active); } catch { readable = false; }
+        }
+        $('current').textContent = currentVersion || (active ? '暂时无法读取' : '当前页面尚未连接更新程序');
+        nextVersion = registration?.waiting ? await version(registration.waiting) : '';
+        $('next').textContent = nextVersion || (checked ? '已是最新版本' : '尚未检查');
+        return readable;
+      }
+      function installed(worker) {
+        if (!worker) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+          const finish = error => {
+            clearTimeout(timer); worker.removeEventListener('statechange', changed);
+            if (error) reject(error); else resolve();
+          };
+          const changed = () => {
+            if (['installed', 'activating', 'activated'].includes(worker.state)) finish();
+            else if (worker.state === 'redundant') finish(new Error('更新未能完成，原有版本仍保留，请重试。'));
+          };
+          const timer = setTimeout(() => finish(new Error('下载更新超时，请检查网络后重试。')), 120000);
+          worker.addEventListener('statechange', changed); changed();
+        });
+      }
+      function controllerReady(expectedVersion) {
+        let stop;
+        const promise = new Promise((resolve, reject) => {
+          let finished = false;
+          const finish = error => {
+            if (finished) return;
+            finished = true; clearTimeout(timer);
+            navigator.serviceWorker.removeEventListener('controllerchange', changed);
+            if (error) reject(error); else resolve();
+          };
+          const changed = async () => {
+            const active = controller();
+            if (!active) return;
+            try { if (await version(active) === expectedVersion) finish(); } catch {}
+          };
+          const timer = setTimeout(() => finish(new Error('更新尚未启用，请只保留此页后重试。')), 30000);
+          stop = () => finish();
+          navigator.serviceWorker.addEventListener('controllerchange', changed); changed();
+        });
+        // The activation request may fail before this concurrent wait finishes.
+        promise.catch(() => {});
+        return { promise, stop };
+      }
+      $('check').addEventListener('click', async () => {
+        if (busy) return;
+        busy = true; checked = false; buttons(); status('正在检查并下载最新版本…');
+        try {
+          registration = await ownRegistration();
+          const firstInstall = !registration?.active;
+          if (registration) {
+            // Always check the server: a previously downloaded waiting version may be older.
+            await timeout(registration.update(), 60000, '检查更新超时，请检查网络后重试。');
+          } else {
+            registration = await timeout(navigator.serviceWorker.register(workerURL, { scope: root.href, updateViaCache: 'none' }), 60000, '连接更新程序超时，请重试。');
+          }
+          const worker = registration.installing;
+          await installed(worker);
+          // On a first installation there is no previous worker to keep the new one waiting.
+          if (firstInstall) {
+            const first = registration.active || registration.waiting || worker;
+            if (!first) throw new Error('更新程序尚未就绪，请重新检查。');
+            const ready = controllerReady(await version(first));
+            try { await ready.promise; } finally { ready.stop(); }
+          }
+          checked = true;
+          await readVersions();
+          status(nextVersion ? '新版本已准备好。点击“更新并打开网站”后启用。' : '网站版本已就绪，可以打开网站。');
+        } catch (error) {
+          checked = false;
+          status('检查未完成：' + error.message);
+        } finally { busy = false; buttons(); }
+      });
+      $('apply').addEventListener('click', async () => {
+        if (busy || !checked) return;
+        busy = true; buttons(); status('正在启用更新…');
+        let ready;
+        try {
+          registration = await ownRegistration();
+          const waiting = registration?.waiting;
+          const target = waiting || registration?.active;
+          if (!target) throw new Error('请先重新检查更新。');
+          if (!waiting && target.state === 'activated') { location.assign(homeURL.href); return; }
+          ready = controllerReady(await version(target));
+          if (waiting) {
+            const result = await message(waiting, 'ASOUND_APPLY_UPDATE', 15000);
+            if (!result?.ok) throw new Error(result?.reason === 'tabs'
+              ? '请关闭其他 ASound 标签页或已打开的网站应用，只保留此检查页，然后再点“更新并打开网站”。'
+              : '暂时无法启用更新，请重新检查。');
+          }
+          await ready.promise;
+          location.assign(homeURL.href);
+        } catch (error) {
+          status(error.message);
+        } finally { ready?.stop(); busy = false; buttons(); }
+      });
+      $('copy').addEventListener('click', async () => {
+        const text = `网站：${root.href}\n当前版本：${currentVersion || '未连接'}\n可用更新：${nextVersion || '无 / 尚未检查'}\n状态：${$('status').textContent}\n浏览器：${navigator.userAgent}`;
+        try {
+          await navigator.clipboard.writeText(text);
+          $('copy').textContent = '已复制';
+        } catch {
+          const field = $('copy-result') || document.createElement('textarea');
+          field.id = 'copy-result'; field.value = text; field.readOnly = true;
+          field.setAttribute('aria-label', '检查结果'); field.style.cssText = 'width:100%;min-height:160px;font-size:16px;margin-top:12px';
+          $('copy').after(field); field.select();
+          let copied = false;
+          try { copied = !!document.execCommand?.('copy'); } catch {}
+          $('copy').textContent = copied ? '已复制' : '请复制下方检查结果';
+        }
+      });
+      (async () => {
+        if (!supported) { status('请用支持网站更新的浏览器，通过 HTTPS 打开此页。'); $('current').textContent = '无法读取'; buttons(); return; }
+        try {
+          registration = await ownRegistration();
+          const readable = await readVersions();
+          status(readable ? '点击“检查更新”，获取最新版本。' : '当前版本暂时无法读取，仍可点击“检查更新”。');
+        } catch (error) { $('current').textContent = currentVersion || '暂时无法读取'; status('读取未完成：' + error.message); }
+        buttons();
+      })();
+    })();
+  </script>
+</body>
+</html>

@@ -29,7 +29,7 @@ async function fixture(hash = "") {
   };
   for (const name of ["initLayout", "registerTab", "registerTabCleanup", "initTalk", "initAccent", "initSettings",
     "onStoreChange", "renderTalkHome", "renderAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels",
-    "paintVocabCount", "repaintSaveButtons", "initUpdates", "warmUp", "show", "showModels", "applyI18n", "isVocabPracticing"])
+    "paintVocabCount", "repaintSaveButtons", "initUpdates", "initSpeechFeedback", "warmUp", "show", "showModels", "applyI18n", "isVocabPracticing"])
     context[name] = noop;
   vm.runInNewContext(source, context);
   await flush();

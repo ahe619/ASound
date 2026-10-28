@@ -25,9 +25,10 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
-DIRECTORIES = {"css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
+DIRECTORIES = {"audio", "css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
-LAZY_PREFIXES = ("vendor/", "kokoro/", "img/vocabulary/",
+OPTIONAL_ROOT_FILES = {"repair.html"}
+LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/",
                  "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'
@@ -76,7 +77,7 @@ def validate_model_base_url(value):
 def source_files(source):
     for path in sorted(source.rglob("*")):
         relative = path.relative_to(source)
-        if relative.parts[0] not in DIRECTORIES and relative.as_posix() not in ROOT_FILES:
+        if relative.parts[0] not in DIRECTORIES and relative.as_posix() not in ROOT_FILES | OPTIONAL_ROOT_FILES:
             continue
         if any(part.startswith(".") or part == "__pycache__" for part in relative.parts):
             continue
