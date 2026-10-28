@@ -255,16 +255,115 @@ test("an older permission result cannot replace or close the newer capture", asy
 test("hands-free pause preserves the current transcript", async () => {
   const f = fixture(), texts = [], states = [];
   const start = f.handsFree.start({ onText: (text) => texts.push(text), onState: (state) => states.push(state) });
-  f.permit();
+  const stream = f.permit();
   assert.equal(await start, true);
   f.utterance();
   await flush();
   assert.equal(f.mic.status().mic, "paused");
+  assert.equal(stream.track.stopped, false, "hands-free pause still retains the input device");
   assert.ok(states.includes("transcribing"));
   f.workers[0].reply(" still here ");
   await flush();
   assert.deepEqual(texts, ["still here"]);
   f.handsFree.stop();
+});
+
+for (const raw of [false, true]) {
+  test(`manual ${raw ? "raw" : "silent"} stop releases the input track and context immediately`, async () => {
+    const f = fixture();
+    const start = f.mic.record();
+    const stream = f.permit(); await start;
+    if (raw) f.frames(15);
+    const result = await f.mic.stop({ raw });
+    assert.equal(result.text, "");
+    assert.equal(stream.track.stopped, true);
+    assert.equal(f.contexts[0].closed, true);
+    assert.equal(f.nodes[0].disconnected, true);
+    assert.equal(f.mic.status().mic, "off");
+  });
+}
+
+test("rolling raw segments explicitly retain the input device until their owner cancels", async () => {
+  const f = fixture();
+  const start = f.mic.record(); const stream = f.permit(); await start;
+  f.frames(15);
+  const first = await f.mic.stop({ raw: true, keepOpen: true });
+  assert.equal(first.audio.length, 15 * 512);
+  assert.equal(f.mic.status().mic, "paused");
+  assert.equal(stream.track.stopped, false);
+  assert.equal(f.contexts[0].closed, false);
+  await f.mic.record();
+  assert.equal(f.permissions.length, 1, "the next segment reuses permission and the original stream");
+  assert.equal(f.contexts.length, 1, "no AudioContext is created outside the initial tap");
+  f.frames(15);
+  await f.mic.stop({ raw: true, keepOpen: true });
+  f.mic.cancel();
+  assert.equal(f.mic.status().mic, "off");
+  assert.equal(stream.track.stopped, true);
+  assert.equal(f.contexts[0].closed, true);
+});
+
+test("keepOpen cannot retain a normal transcribed take", async () => {
+  const f = fixture();
+  const start = f.mic.record(); const stream = f.permit(); await start;
+  await f.mic.stop({ keepOpen: true });
+  assert.equal(stream.track.stopped, true);
+  assert.equal(f.mic.status().mic, "off");
+});
+
+for (const error of [false, true]) {
+  test(`manual stop releases capture before its ${error ? "failed" : "successful"} transcript finishes`, async () => {
+    const f = fixture();
+    const start = f.mic.record();
+    const stream = f.permit(); await start;
+    f.frames(15);
+    const stop = f.mic.stop();
+    const result = error ? assert.rejects(stop) : stop;
+    assert.equal(stream.track.stopped, true);
+    assert.equal(f.contexts[0].closed, true);
+    await flush();
+    f.workers[0].reply("finished", error);
+    if (error) await result;
+    else assert.equal((await result).text, "finished");
+    assert.equal(f.mic.status().mic, "off");
+  });
+}
+
+for (const stage of ["permission", "worklet", "recording"]) {
+  test(`repainting cancels an owned ${stage} stage while preserving a newer control`, async () => {
+    const f = fixture({ holdWorklet: stage === "worklet" });
+    const button = f.micButton();
+    const start = button.click();
+    let stream;
+    if (stage !== "permission") { stream = f.permit(); await flush(); }
+    if (stage === "recording") await start;
+    f.cancelMicButton(button, { preserveTranscription: true });
+    if (stage === "permission") stream = f.permit();
+    if (stage === "worklet") f.worklet.resolve();
+    await start;
+    assert.equal(stream.track.stopped, true);
+    assert.equal(button.classList.contains("rec"), false);
+    assert.equal(button.classList.contains("busy"), false);
+    const newer = f.micButton();
+    const next = newer.click(); const nextStream = f.permit(); await next;
+    f.cancelMicButton(button, { preserveTranscription: true });
+    assert.equal(nextStream.track.stopped, false);
+    assert.equal(newer.classList.contains("rec"), true);
+    f.cancelMicButton(newer);
+  });
+}
+
+test("repainting retains the owned transcription after capture has been released", async () => {
+  const f = fixture(), heard = [];
+  const button = f.micButton({ onText: text => heard.push(text) });
+  const start = button.click(); const stream = f.permit(); await start;
+  f.frames(15);
+  const stop = button.click(); await flush();
+  f.cancelMicButton(button, { preserveTranscription: true });
+  assert.equal(stream.track.stopped, true);
+  assert.equal(button.classList.contains("busy"), true);
+  f.workers[0].reply("valid result"); await stop;
+  assert.deepEqual(heard, ["valid result"]);
 });
 
 for (const error of [false, true]) {
@@ -353,7 +452,7 @@ test("switching buttons during ASR ignores the old result without resetting the 
   const aStop = a.click();
   await flush();
   const bStart = b.click();
-  f.permit();
+  const newStream = f.permit();
   await bStart;
   f.workers[0].reply("old page");
   await aStop;
@@ -362,6 +461,7 @@ test("switching buttons during ASR ignores the old result without resetting the 
   assert.equal(a.classList.contains("busy"), false);
   assert.equal(b.classList.contains("rec"), true);
   assert.equal(f.mic.status().mic, "recording");
+  assert.equal(newStream.track.stopped, false, "the old stop completion cannot release a new capture");
   f.mic.close();
 });
 

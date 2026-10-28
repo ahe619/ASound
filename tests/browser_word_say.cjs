@@ -40,7 +40,7 @@ window.ASoundMic={supported:true,RATE:16000,hasModel:()=>true,hasNative:()=>fals
    }catch{await route.fulfill({status:404,body:'{}',contentType:'application/json'});}
   });
   await page.goto(base+'?web&nogpu#vocab/practice');await page.locator('.ws-say').waitFor();
-  return {context,page,errors,read:()=>page.evaluate(()=>JSON.parse(localStorage.getItem('asound.wordstudy.v1')))};
+  return {context,page,errors,read:()=>page.evaluate(()=>navigator.locks.request('asound.wordstudy.v1',()=>JSON.parse(localStorage.getItem('asound.wordstudy.v1'))))};
  }
  try{
   for(const [target,alternative] of [['clothes','clothing'],['color','colour']]){

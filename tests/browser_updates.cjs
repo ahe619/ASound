@@ -30,6 +30,35 @@ for (const number of [1, 2, 3]) {
     .replace('const ASSETS = []; // @asound-assets', `const ASSETS = ${JSON.stringify(assets)}; // @asound-assets`);
   releases.set(number, { files, sw });
 }
+// Tiny historical-worker fixtures reproduce the old fetch failure and preserve
+// real waiting/active worker lifecycles. The fixed worker is production sw.js.
+// Deleting these APIs simulates the compatibility condition, not an entire Safari engine.
+const legacyAPIs = 'delete AbortSignal.prototype.throwIfAborted;Object.defineProperty(AbortSignal.prototype,"reason",{configurable:true,get(){return undefined}});\n';
+for (const [number, version, broken] of [[11, '0.3.1-legacy-working', false], [12, '0.3.5-legacy-broken', true], [13, '0.3.7-legacy-fixed', null]]) {
+  const files = new Map([...releases.get(1).files].map(([name, body]) => [name, body.replaceAll('0.3.1-update-test', version)]));
+  files.set('js/compat-probe.js', `export const version=${JSON.stringify(version)};`);
+  const assets = [...files].map(([url, body]) => ({ url, sha256: crypto.createHash('sha256').update(body).digest('hex') }));
+  const oldWorker = `
+    const version=${JSON.stringify(version)}, root=self.registration.scope;
+    const name='asound-shell-v2:'+encodeURIComponent(root)+':'+version;
+    self.addEventListener('install',event=>event.waitUntil((async()=>{
+      const cache=await caches.open(name);
+      for(const file of ${JSON.stringify([...files.keys()])})await cache.put(new URL(file,root),await fetch(new URL(file,root),{cache:'no-store'}));
+      await cache.put(new URL('__asound_release__',root),new Response(JSON.stringify({version,installed:Date.now()})));
+    })()));
+    self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
+    self.addEventListener('message',event=>{if(event.data?.type==='ASOUND_VERSION')event.ports[0]?.postMessage({version});});
+    self.addEventListener('fetch',event=>event.respondWith((async()=>{
+      try{
+        ${broken ? 'event.request.signal.throwIfAborted();' : ''}
+        const url=new URL(event.request.url);url.search='';if(url.href===root)url.href=new URL('index.html',root).href;
+        return await(await caches.open(name)).match(url)||fetch(event.request);
+      }catch{return new Response('Old worker failure',{status:503});}
+    })()));`;
+  const fixed = template.replace('const RELEASE = "development"; // @asound-release', `const RELEASE = ${JSON.stringify(version)}; // @asound-release`)
+    .replace('const ASSETS = []; // @asound-assets', `const ASSETS = ${JSON.stringify(assets)}; // @asound-assets`);
+  releases.set(number, { files, sw: legacyAPIs + (broken === null ? fixed : oldWorker) });
+}
 let served = 1;
 let failUpdate = false;
 const requests = [];
@@ -94,7 +123,58 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.evaluate(() => api.updateStatus().version), '0.3.3-update-test');
     assert.equal(Number(await page.evaluate(() => sessionStorage.loads)), Number(originalLoads) + 1);
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ passed: ['1 -> waiting 2 -> latest 3', 'no false redundant failure', 'no reload before consent', 'failed check preserves waiting release', 'explicit apply activates 3 offline'], errors }));
+    await context.close();
+    failUpdate = false;
+    const base = `http://127.0.0.1:${server.address().port}/`;
+    const controllerVersion = target => target.evaluate(() => new Promise(resolve => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = event => { channel.port1.close(); resolve(event.data.version); };
+      navigator.serviceWorker.controller.postMessage({ type: 'ASOUND_VERSION' }, [channel.port2]);
+    }));
+    const controlled = target => target.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) await new Promise(resolve => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+    });
+    // A newer bad waiting cache must not be confused with the working active worker.
+    served = 11;
+    const legacyContext = await browser.newContext({ serviceWorkers: 'allow' });
+    const one = await legacyContext.newPage(); one.on('pageerror', error => errors.push(error.message));
+    await one.goto(base); await one.waitForFunction(() => window.started); await controlled(one);
+    await one.reload(); await one.waitForFunction(() => window.started);
+    const two = await legacyContext.newPage(); two.on('pageerror', error => errors.push(error.message));
+    await two.goto(base); await two.waitForFunction(() => window.started);
+    served = 12;
+    assert.equal((await one.evaluate(() => api.checkForUpdates())).nextVersion, '0.3.5-legacy-broken');
+    served = 13;
+    const fixedWaiting = await one.evaluate(() => api.checkForUpdates());
+    assert.equal(fixedWaiting.state, 'available'); assert.equal(fixedWaiting.nextVersion, '0.3.7-legacy-fixed');
+    for (const tab of [one, two]) {
+      assert.equal(await controllerVersion(tab), '0.3.1-legacy-working');
+      assert.equal(await tab.evaluate(() => documentVersion), '0.3.1-legacy-working');
+      assert.match(await tab.evaluate(async () => (await fetch('js/compat-probe.js')).text()), /0\.3\.1-legacy-working/);
+    }
+    const blocked = await one.evaluate(() => api.applyUpdate());
+    assert.equal(blocked.state, 'blocked'); assert.equal(blocked.reason, 'tabs');
+    await two.close(); await one.evaluate(() => api.applyUpdate());
+    await one.waitForFunction(() => window.documentVersion === '0.3.7-legacy-fixed' && window.started);
+    await legacyContext.close();
+    // The genuinely broken active worker still responds to version messages and
+    // can be recovered without requiring its broken document to apply the update.
+    served = 12;
+    const brokenContext = await browser.newContext({ serviceWorkers: 'allow' });
+    const stuck = await brokenContext.newPage(); stuck.on('pageerror', error => errors.push(error.message));
+    await stuck.goto(base); await stuck.waitForFunction(() => window.started); await controlled(stuck);
+    assert.equal(await stuck.evaluate(async () => (await fetch('js/compat-probe.js')).status), 503);
+    assert.equal(await controllerVersion(stuck), '0.3.5-legacy-broken');
+    served = 13; await stuck.evaluate(() => api.checkForUpdates());
+    await stuck.waitForFunction(() => !window.api.updateStatus().nextVersion && window.api.updateStatus().state === 'current');
+    assert.equal(await controllerVersion(stuck), '0.3.7-legacy-fixed');
+    assert.equal(await stuck.evaluate(async () => (await fetch('js/compat-probe.js')).status), 200);
+    await stuck.reload(); await stuck.waitForFunction(() => window.documentVersion === '0.3.7-legacy-fixed' && window.started);
+    await brokenContext.close();
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ passed: ['1 -> waiting 2 -> latest 3', 'no false redundant failure', 'no reload before consent', 'failed check preserves waiting release', 'explicit apply activates 3 offline',
+      'legacy APIs: working active + bad waiting + fixed update preserves both tabs', 'legacy multi-tab apply stays blocked', 'legacy broken active automatically recovers'], errors }));
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

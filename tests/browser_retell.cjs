@@ -7,6 +7,7 @@ const app = path.resolve(__dirname, '../app');
 const story = {title:'The Lost Umbrella', points:['the bus','the blue umbrella','a funny message','the lost and found','a coffee for the driver'],
  story:'On Monday morning, Mia took the bus to work. It was raining hard, so she carried her big blue umbrella. She was reading a funny message from her sister and almost missed her stop. She jumped off the bus just in time, but the umbrella stayed on the seat. All day she felt bad about it. After work, she went back to the bus station and asked at the lost and found. A kind driver had found it and kept it safe. Mia thanked him and bought him a coffee.'};
 const speech = `export const VOICES=[],recommendVoices=()=>[],voiceById=()=>({}),speak=()=>{},stopSpeaking=()=>{},audioContext=()=>null;
+export const voicePreviewBtn=()=>document.createElement('button');
 export const unlockAudio=()=>{window.spies.unlocks++};
 export const speakBtn=(text,label)=>{const b=document.createElement('button');b.textContent=label||text;return b};`;
 const ai = `export const aiErrorText=()=> 'Unavailable';export const askJSON=(prompt,opts={})=>{
@@ -37,10 +38,15 @@ const profiles = [
     if(!rel)return route.fulfill({contentType:'text/html',body:harness});
     if(rel==='js/speech.js')return route.fulfill({contentType:'text/javascript',body:speech});
     if(rel==='js/ai.js')return route.fulfill({contentType:'text/javascript',body:ai});
+    // mic.js imports the engine readiness promise. Engine boot is outside this
+    // isolated mode fixture; do not pull its production dependency graph into stubs.
+    if(rel==='js/engines.js')return route.fulfill({contentType:'text/javascript',body:'export const enginesApplied=Promise.resolve();'});
     if(rel==='js/packs.js')return route.fulfill({contentType:'text/javascript',body:'export const activePacks=()=>window.testPacks;'});
     try{await route.fulfill({body:await fs.readFile(path.join(app,rel)),contentType:rel.endsWith('.js')?'text/javascript':rel.endsWith('.json')?'application/json':rel.endsWith('.css')?'text/css':'application/octet-stream'});}catch{await route.fulfill({status:404,body:'Not found'});}
    });
    await context.addInitScript(({installed,name,story})=>{
+    window.addEventListener('error',event=>{window.harnessError=event.message||'Harness startup error'});
+    window.addEventListener('unhandledrejection',event=>{window.harnessError=String(event.reason?.message||event.reason)});
     window.spies={preloads:0,asks:0,records:0,cancels:0,transcribes:0,unlocks:0};window.claude={};window.testStory=story;
     window.testPacks={llm:installed?'llm-cpu':null,asr:installed?'asr-tiny':null};
     localStorage.setItem('asound.layout.v1','desktop'); // A layout override must never authorize mobile inference.
@@ -49,7 +55,8 @@ const profiles = [
      async record(){spies.records++},async stop(){return {audio:new Float32Array(64000).fill(0.2)}},
      async transcribe(){spies.transcribes++;return story.story}};
    },{installed,name,story});
-   await page.goto('http://asound.test/');await page.waitForFunction(()=>window.ready);
+   await page.goto('http://asound.test/');await page.waitForFunction(()=>window.ready||window.harnessError);
+   assert.equal(await page.evaluate(()=>window.harnessError||null),null,`${name}: fixture module startup failed`);
    assert.deepEqual(await page.evaluate(()=>spies),{preloads:0,asks:0,records:0,cancels:0,transcribes:0,unlocks:0});
    await page.locator('.rt-choice').first().click();await page.waitForSelector('.drill-text.para',{state:'attached'});
    assert.equal(await page.evaluate(()=>spies.asks),desktop&&installed?1:0);

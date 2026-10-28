@@ -11,7 +11,12 @@ export const CACHE = "asound-models-v1";
 export const CANON = "https://models.asound.invalid/"; // cache keys look the same whichever source served the file
 const FORCE_WEB = new URLSearchParams(location.search).has("web");
 
+// AbortSignal.throwIfAborted and AbortSignal.reason need Safari 15.4 / Chromium 100.
+const abortReason = (signal) => signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+const checkAborted = (signal) => { if (signal && signal.aborted) throw abortReason(signal); };
+
 let catalog = null;
+let downloadBases = [];        // optional operator-configured mirrors, never user preferences
 let mode = "web";
 let gpu = { webgpu: false, f16: false, vendor: "", mobile: false };
 let status = {};               // pack id -> {state, done, total, rate?, error?}
@@ -42,6 +47,7 @@ export async function initPacks({ readOnly = false } = {}) {
     savePrefs();
   }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
+  downloadBases = mode === "web" ? validateDownloadBases(catalog.downloadBases) : [];
   if (mode === "web") {
     voiceRoot(); // Validate the optional same-origin voice source before using it.
     await checkRuntimeRelease();
@@ -88,7 +94,7 @@ async function checkRuntimeRelease(signal) {
     if (typeof data.version !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(data.version)) throw new Error("Invalid release metadata");
     runtimeRelease = { version: data.version };
   } catch (error) {
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) throw abortReason(signal);
     runtimeRelease = { error: String(error.message || error) };
   }
 }
@@ -120,7 +126,7 @@ async function runtimeComplete(id, cache) {
 function waitForReleaseController(signal) {
   const sw = navigator.serviceWorker;
   const controlsRelease = () => sw?.controller?.scriptURL === new URL("sw.js", runtimeRoot).href;
-  signal.throwIfAborted();
+  checkAborted(signal);
   if (controlsRelease()) return Promise.resolve();
   if (!sw?.addEventListener) return Promise.reject(new Error("Offline storage is unavailable in this browser. Reopen the HTTPS website and retry."));
   return new Promise((resolve, reject) => {
@@ -131,7 +137,7 @@ function waitForReleaseController(signal) {
       if (error) reject(error); else resolve();
     };
     const changed = () => { if (controlsRelease()) finish(); };
-    const aborted = () => finish(signal.reason);
+    const aborted = () => finish(abortReason(signal));
     const timer = setTimeout(() => finish(new Error("The offline website is not ready. Reconnect, check for an update, and retry the download.")), 120000);
     sw.addEventListener("controllerchange", changed);
     signal.addEventListener("abort", aborted, { once: true });
@@ -148,7 +154,7 @@ async function ensureRuntimes(id, signal) {
   await waitForReleaseController(signal);
   cache = await releaseRuntimeCache();
   for (const file of runtimeFiles(id)) {
-    signal.throwIfAborted();
+    checkAborted(signal);
     if (await runtimeCached(cache, file)) continue;
     // FetchEvent.request.signal is not linked to page cancellation in every browser.
     // Address the worker which owns this request explicitly, even if control changes.
@@ -161,14 +167,14 @@ async function ensureRuntimes(id, signal) {
     signal.addEventListener("abort", cancelRuntime, { once: true });
     let response;
     try {
-      signal.throwIfAborted();
+      checkAborted(signal);
       response = await fetch(new URL(file, runtimeRoot).href, {
         signal, headers: { "X-ASound-Runtime-Request": requestId },
       });
     } finally { signal.removeEventListener("abort", cancelRuntime); }
     if (!response.ok) throw new Error(`Offline runtime: HTTP ${response.status} (${file})`);
     if (response.body) await response.body.cancel();
-    signal.throwIfAborted();
+    checkAborted(signal);
     // A successful uncontrolled HTTP response is not proof that offline use works.
     // sw.js verifies and stores the complete body before returning its response.
     cache = await releaseRuntimeCache();
@@ -319,6 +325,37 @@ function voiceRoot() {
     throw new Error("Invalid hosted browser voice source");
   }
   return new URL(`${source.models}/`, location.href).href;
+}
+
+function validateDownloadBases(values) {
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.length > 3) throw new Error("Invalid download mirrors");
+  return [...new Set(values.map(value => {
+    if (typeof value !== "string" || !/^https?:\/\//i.test(value) || /[\s\\?#]/.test(value)) throw new Error("Invalid download mirror URL");
+    let decoded = value;
+    try {
+      for (let i = 0; i < 8; i++) {
+        const next = decodeURIComponent(decoded);
+        if (next === decoded) break;
+        decoded = next;
+        if (i === 7) throw new Error();
+      }
+      const url = new URL(value);
+      if (url.username || url.password || url.port === "0"
+        || !/^[A-Za-z0-9.:[\]-]+$/.test(url.hostname)
+        || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+        || /[\s\\?#\x00-\x1f]/.test(decoded) || decoded.split("/").some(part => part === "." || part === "..")) throw new Error();
+    } catch { throw new Error("Invalid download mirror URL"); }
+    return value.replace(/\/+$/, "");
+  }))];
+}
+
+function hostedVoiceDownloadUrls(file) {
+  // The cache identity and inference base stay on the original versioned source.
+  // Mirrors only change where a verified, explicitly requested download comes from.
+  if (downloadBases.length && !/^[a-f0-9]{64}$/i.test(file.sha256 || "")) throw new Error("Mirrored voice downloads require a SHA-256 digest");
+  const relative = `${catalog.voiceSource.models}/${file.repo}/resolve/main/${file.path}`;
+  return [...new Set([...downloadBases.map(base => `${base}/${relative}`), fileUrl(file, null)])];
 }
 function hostedVoiceFile(f) {
   return mode === "web" && voiceRoot() && f.repo === catalog.voiceSource.repository
@@ -510,30 +547,30 @@ async function pumpWeb() {
       if (llmSource(id)) set(p.size);
       else {
         const source = await pickSource();
-        ctl.signal.throwIfAborted();
+        checkAborted(ctl.signal);
         const cfg = await engineConfig(id, source);
         await window.ASoundAI.download(cfg.llm, (frac) => set(Math.round(frac * p.size)), ctl.signal);
-        ctl.signal.throwIfAborted();
+        checkAborted(ctl.signal);
         setLlmSource(id, source);
       }
     } else {
       const source = p.id === "voice" && hostedVoice() ? null : (repairRuntime ? preferredSource() : await pickSource());
-      ctl.signal.throwIfAborted();
+      checkAborted(ctl.signal);
       const cache = await caches.open(CACHE);
       let done = 0;
       for (const f of p.files) {
-        ctl.signal.throwIfAborted();
+        checkAborted(ctl.signal);
         if (await cache.match(canonKey(f))) { done += f.size; set(done); continue; }
         await downloadModelFile({ cache, key: canonKey(f), file: f,
-          urls: source === null ? [fileUrl(f, null)] : [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
+          urls: source === null ? hostedVoiceDownloadUrls(f) : [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
           signal: ctl.signal, onBytes: (n) => set(done + n) });
         done += f.size;
         set(done);
       }
     }
-    ctl.signal.throwIfAborted();
+    checkAborted(ctl.signal);
     await ensureRuntimes(id, ctl.signal);
-    ctl.signal.throwIfAborted();
+    checkAborted(ctl.signal);
     delete status[id];
   } catch (e) {
     status[id] = { ...packStatus(id), state: "partial", error: ctl.signal.aborted ? undefined : String((e && e.message) || e).slice(0, 160) };

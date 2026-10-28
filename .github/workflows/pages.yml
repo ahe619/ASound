@@ -34,7 +34,14 @@ jobs:
       - name: JavaScript regression tests
         run: node --test tests/*.mjs
       - name: Build and verify the small-model website release
-        run: python tools/prepare_soundoa_site.py --download-web-voice
+        env:
+          ASOUND_DOWNLOAD_BASE_URL: ${{ vars.ASOUND_DOWNLOAD_BASE_URL }}
+        run: |
+          args=(--download-web-voice)
+          if [[ -n "$ASOUND_DOWNLOAD_BASE_URL" ]]; then
+            args+=(--download-base-url "$ASOUND_DOWNLOAD_BASE_URL")
+          fi
+          python tools/prepare_soundoa_site.py "${args[@]}"
       - name: Upload only the web release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3

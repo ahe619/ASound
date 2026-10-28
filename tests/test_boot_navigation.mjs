@@ -28,7 +28,7 @@ async function fixture(hash = "") {
     deviceInfo: () => ({ mobile: true }),
   };
   for (const name of ["initLayout", "registerTab", "registerTabCleanup", "initTalk", "initAccent", "initSettings",
-    "onStoreChange", "renderTalkHome", "renderAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels",
+    "onStoreChange", "renderTalkHome", "renderAccent", "cleanupAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels",
     "paintVocabCount", "repaintSaveButtons", "initUpdates", "initSpeechFeedback", "warmUp", "show", "showModels", "applyI18n", "isVocabPracticing"])
     context[name] = noop;
   vm.runInNewContext(source, context);

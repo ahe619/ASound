@@ -29,11 +29,12 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
   const events = new Map();
   const env = {
     storage, files: { ...files }, fetched: [], skipped: 0, claimed: 0,
-    windows: [{ id: "one", url: SCOPE }],
+    windows: [{ id: "one", url: SCOPE }], registration: { scope: SCOPE },
   };
   const context = {
-    URL, Request, Response, AbortController, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
+    URL, Request, Response, AbortController, AbortSignal, DOMException, MessageChannel, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
     Uint8Array, crypto: webcrypto, caches: storage,
+    setTimeout: (fn, ms) => setTimeout(fn, env.timeoutFor?.(ms) ?? ms), clearTimeout,
     fetch: async (request) => {
       const relative = String(request.url || request).slice(SCOPE.length);
       env.fetched.push(relative);
@@ -42,7 +43,7 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
       return new Response(env.files[relative]);
     },
     self: {
-      registration: { scope: SCOPE },
+      registration: env.registration,
       addEventListener: (name, fn) => events.set(name, fn),
       skipWaiting: async () => { env.skipped++; },
       clients: { claim: async () => { env.claimed++; }, matchAll: async () => env.windows },
@@ -66,6 +67,15 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
   return env;
 }
 
+// Safari before 15.4 and Chromium before 100 have neither AbortSignal.throwIfAborted nor AbortSignal.reason.
+async function withoutModernAbortSignal(run) {
+  const proto = AbortSignal.prototype;
+  const saved = ["throwIfAborted", "reason"].map((name) => [name, Object.getOwnPropertyDescriptor(proto, name)]);
+  delete proto.throwIfAborted;
+  Object.defineProperty(proto, "reason", { configurable: true, get: () => undefined });
+  try { return await run(); } finally { for (const [name, descriptor] of saved) Object.defineProperty(proto, name, descriptor); }
+}
+
 test("a release installs atomically and pins offline resources without auto-activation", async () => {
   const w = worker("one", { "index.html": "page one", "js/main.js": "script one" });
   await w.dispatch("install");
@@ -78,6 +88,166 @@ test("a release installs atomically and pins offline resources without auto-acti
   assert.deepEqual(w.fetched, []);
   assert.equal(await w.get("models/large.bin"), undefined);
   assert.equal(await w.get("api/health"), undefined);
+});
+
+const voiceRuntime = "kokoro/ort-cpu/ort-wasm-simd-threaded.wasm";
+function mirrored(files, mirrors = ["https://cdn.test/voice"]) {
+  return assets(files).map(asset => asset.url === "index.html" ? asset : { ...asset, lazy: true,
+    size: Buffer.byteLength(files[asset.url]),
+    mirrors: mirrors.map(base => `${base}/assets/${asset.sha256}/${asset.url}`) });
+}
+
+test("verified mirrors keep same-origin cache keys and strip remote response URLs", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const manifest = mirrored(files), w = worker("one", files, new CacheStorage(), manifest);
+  await w.dispatch("install");
+  const seen = [];
+  w.interceptFetch = request => {
+    seen.push({ url: request.url, mode: request.mode, credentials: request.credentials });
+    const response = new Response("runtime", { headers: { "Content-Type": "application/wasm", "X-Remote": "not copied" } });
+    Object.defineProperty(response, "url", { value: request.url });
+    return response;
+  };
+  const response = await w.get(voiceRuntime);
+  assert.equal(await response.text(), "runtime");
+  assert.equal(response.url, "", "the mirrored URL must not become a module's base URL");
+  assert.equal(response.headers.get("X-Remote"), null);
+  assert.deepEqual(seen, [{ url: manifest[1].mirrors[0], mode: "cors", credentials: "omit" }]);
+  w.interceptFetch = () => { throw new Error("offline"); };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+  assert.ok(w.storage.data.get(prefix + "one").has(SCOPE + voiceRuntime));
+  assert.equal(w.storage.data.get(prefix + "one").has(manifest[1].mirrors[0]), false);
+});
+
+test("bad MIME, opaque responses and hash mismatches fall back through mirrors to the original URL", async () => {
+  const files = { "index.html": "page", "kokoro/neural-tts.js": "export const ok = true;" };
+  const manifest = mirrored(files, ["https://one.test", "https://two.test", "https://three.test"]);
+  const w = worker("one", files, new CacheStorage(), manifest);
+  await w.dispatch("install"); const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url);
+    const response = new Response(seen.length === 3 ? "x".repeat(files["kokoro/neural-tts.js"].length) : files["kokoro/neural-tts.js"], {
+      headers: { "Content-Type": seen.length === 1 ? "text/html" : "application/javascript" } });
+    if (seen.length === 2) Object.defineProperty(response, "type", { value: "opaque" });
+    return response;
+  };
+  const response = await w.get("kokoro/neural-tts.js");
+  assert.equal(await response.text(), files["kokoro/neural-tts.js"]);
+  assert.equal(response.headers.get("Content-Type"), "text/javascript");
+  assert.deepEqual(seen, [...manifest[1].mirrors, SCOPE + "kokoro/neural-tts.js"]);
+});
+
+test("mirror connection and body stalls abort that source and allow the next source", async () => {
+  for (const kind of ["connection", "body", "total"]) {
+    const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+    const manifest = mirrored(files, ["https://stalled.test", "https://good.test"]);
+    const w = worker(kind, files, new CacheStorage(), manifest);
+    await w.dispatch("install");
+    w.timeoutFor = ms => ms === (kind === "connection" ? 10000 : kind === "total" ? 180000 : 20000) ? 15 : 1000;
+    let stalledSignal; const seen = [];
+    w.interceptFetch = request => {
+      seen.push(request.url);
+      if (seen.length > 1) return new Response("runtime", { headers: { "Content-Type": "application/wasm" } });
+      stalledSignal = request.signal;
+      if (kind === "connection") return new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+        request.signal.addEventListener("abort", () => controller.error(request.signal.reason), { once: true });
+      } }), { headers: { "Content-Type": "application/wasm" } });
+    };
+    assert.equal(await (await w.get(voiceRuntime)).text(), "runtime", kind);
+    assert.equal(stalledSignal.aborted, true, kind);
+    assert.deepEqual(seen, manifest[1].mirrors, kind);
+  }
+});
+
+test("oversized bodies are cancelled immediately and truncated bodies cannot enter the cache", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const manifest = mirrored(files, ["https://oversized.test", "https://truncated.test"]);
+  const w = worker("one", files, new CacheStorage(), manifest); await w.dispatch("install");
+  let cancelled = false, signal; const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url);
+    if (seen.length === 1) {
+      signal = request.signal;
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(8)); },
+        cancel() { cancelled = true; } }), { headers: { "Content-Type": "application/wasm" } });
+    }
+    return new Response(seen.length === 2 ? "short" : "runtime", { headers: { "Content-Type": "application/wasm" } });
+  };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+  assert.equal(cancelled, true); assert.equal(signal.aborted, true);
+  assert.deepEqual(seen, [...manifest[1].mirrors, SCOPE + voiceRuntime]);
+});
+
+test("the final site is allowed to make steady progress beyond the mirror total deadline", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const w = worker("one", files, new CacheStorage(), mirrored(files)); await w.dispatch("install");
+  w.timeoutFor = ms => ms === 180000 ? 5 : 100;
+  w.interceptFetch = request => {
+    if (!request.url.startsWith(SCOPE)) return new Response("bad", { headers: { "Content-Type": "text/plain" } });
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode("run"));
+      setTimeout(() => { controller.enqueue(new TextEncoder().encode("time")); controller.close(); }, 25);
+    } }), { headers: { "Content-Type": "application/wasm" } });
+  };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+});
+
+test("cancelling a mirrored runtime stops the body and every fallback, preserving client isolation and retry", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const w = worker("one", files, new CacheStorage(), mirrored(files, ["https://one.test", "https://two.test"]));
+  await w.dispatch("install"); let networkSignal; const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url); networkSignal = request.signal;
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      request.signal.addEventListener("abort", () => controller.error(request.signal.reason), { once: true });
+    } }), { headers: { "Content-Type": "application/wasm" } });
+  };
+  const id = "mirror-runtime-cancel-0001";
+  const get = requestId => w.dispatch("fetch", { clientId: "one", request: new Request(SCOPE + voiceRuntime, { headers: { "X-ASound-Runtime-Request": requestId } }) });
+  const cancel = (requestId, clientId = "one") => w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId }, source: { id: clientId, url: SCOPE }, ports: [] });
+  const pending = get(id);
+  while (!networkSignal) await new Promise(resolve => setImmediate(resolve));
+  await cancel(id, "two"); assert.equal(networkSignal.aborted, false);
+  await cancel(id); assert.equal((await pending).status, 503);
+  assert.equal(networkSignal.aborted, true); assert.equal(seen.length, 1);
+  assert.equal(await (await w.storage.open(prefix + "one")).match(SCOPE + voiceRuntime), undefined);
+  const early = "mirror-runtime-early-0002";
+  await cancel(early); assert.equal((await get(early)).status, 503); assert.equal(seen.length, 1);
+  w.interceptFetch = request => { seen.push(request.url); return new Response("runtime", { headers: { "Content-Type": "application/wasm" } }); };
+  assert.equal(await (await get("mirror-runtime-retry-0003")).text(), "runtime");
+  assert.equal(seen.length, 2);
+});
+
+test("a changed previously-used voice asset can be installed from its verified mirror", async () => {
+  const oldFiles = { "index.html": "page", "audio/voices/af_heart.wav": "old audio" };
+  const old = worker("old", oldFiles); await old.dispatch("install");
+  const files = { ...oldFiles, "audio/voices/af_heart.wav": "new audio" };
+  const next = worker("new", files, old.storage, mirrored(files));
+  next.interceptFetch = request => {
+    assert.ok(request.url.startsWith("https://cdn.test/"));
+    return new Response("new audio", { headers: { "Content-Type": "audio/wav" } });
+  };
+  await next.dispatch("install");
+  next.interceptFetch = () => { throw new Error("offline"); };
+  assert.equal(await (await next.get("audio/voices/af_heart.wav")).text(), "new audio");
+});
+
+test("mirrors cannot be attached to arbitrary scripts or escape the pinned HTTPS hash path", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const good = mirrored(files);
+  for (const change of [
+    asset => ({ ...asset, url: "js/main.js" }),
+    asset => ({ ...asset, lazy: false }),
+    asset => ({ ...asset, size: undefined }),
+    asset => ({ ...asset, size: -1 }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0].replace("https:", "http:")] }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0] + "?replace=true"] }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0].replace(asset.sha256, "0".repeat(64))] }),
+    asset => ({ ...asset, mirrors: Array.from({ length: 4 }, (_, i) => asset.mirrors[0].replace("cdn.test", `cdn${i}.test`)) }),
+  ]) await assert.rejects(worker("bad", files, new CacheStorage(), [good[0], change(good[1])]).dispatch("install"), /Invalid release manifest/);
 });
 
 test("a bad download cannot destroy the working release or model cache", async () => {
@@ -228,6 +398,124 @@ test("early runtime cancellations are client-scoped, bounded, and expire before 
   await cancel(first);
   for (let i = 1; i <= 128; i++) await cancel(`bounded-runtime-${String(i).padStart(3, "0")}`);
   assert.equal(await (await get(first)).text(), "runtime", "oldest tombstone is evicted at the capacity bound");
+});
+
+test("older engines without AbortSignal.throwIfAborted still get every file, on-demand runtimes and cancellation", () => withoutModernAbortSignal(async () => {
+  const files = { "index.html": "page", "js/main.js": "script", "repair.html": "repair", "vendor/runtime.wasm": "runtime" };
+  const w = worker("one", files, new CacheStorage(), assets(files).map(a => a.url.startsWith("vendor/") ? { ...a, lazy: true } : a));
+  await w.dispatch("install");
+  for (const [path, text] of [["", "page"], ["index.html", "page"], ["js/main.js", "script"], ["repair.html", "repair"], ["vendor/runtime.wasm", "runtime"]]) {
+    const response = await w.get(path);
+    assert.equal(response.status, 200, `${path || "scope root"} must not become the offline 503`);
+    assert.equal(await response.text(), text);
+  }
+  w.storage.data.get(prefix + "one").delete(SCOPE + "vendor/runtime.wasm"); w.fetched.length = 0;
+  const id = "legacy-runtime-request-0001";
+  await w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId: id }, source: w.windows[0], ports: [] });
+  const cancelled = await w.dispatch("fetch", { clientId: "one", request: new Request(new URL("vendor/runtime.wasm", SCOPE), { headers: { "X-ASound-Runtime-Request": id } }) });
+  assert.equal(cancelled.status, 503);
+  assert.deepEqual(w.fetched, [], "a cancelled runtime request never reaches the network");
+}));
+
+test("older engines verify mirrored runtimes and recover them from the previous release", () => withoutModernAbortSignal(async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const manifest = mirrored(files, ["https://one.test", "https://two.test"]), storage = new CacheStorage();
+  const one = worker("one", files, storage, manifest), two = worker("two", files, storage, manifest);
+  await one.dispatch("install"); await two.dispatch("install");
+  const seen = [];
+  one.interceptFetch = request => { seen.push(request.url); return request.url.startsWith("https://one.test")
+    ? new Response("bad", { status: 500 }) : new Response("runtime", { headers: { "Content-Type": "application/wasm" } }); };
+  const response = await one.get(voiceRuntime);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "runtime");
+  assert.deepEqual(seen, manifest[1].mirrors, "a failing mirror falls through to the next one");
+  two.interceptFetch = () => { throw new Error("offline"); };
+  const recovered = await two.get(voiceRuntime);
+  assert.equal(recovered.status, 200, "the previous release's verified copy is used");
+  assert.equal(await recovered.text(), "runtime");
+}));
+
+test("no AbortSignal.throwIfAborted call is left in the worker", () => {
+  assert.doesNotMatch(source, /\.throwIfAborted\s*\(/);
+});
+
+const activeWorker = (version) => ({ postMessage(message, ports) {
+  assert.equal(message.type, "ASOUND_VERSION");
+  ports[0].postMessage({ version }); ports[0].close();
+} });
+
+test("without throwIfAborted, a fixed release replaces an active 0.3.2-0.3.6 release at once; others still wait", () => withoutModernAbortSignal(async () => {
+  const install = async (previous, { active = true } = {}) => {
+    const storage = new CacheStorage();
+    if (previous) await (await storage.open(prefix + previous.version)).put(SCOPE + "__asound_release__", Response.json({ installed: 1, ...previous }));
+    const w = worker("0.3.7-fixed", { "index.html": "page" }, storage);
+    if (active) w.registration.active = activeWorker(previous?.version || "");
+    await w.dispatch("install");
+    return w.skipped;
+  };
+  assert.equal(await install({ version: "0.3.5-862cb8bf6c4f" }), 1, "a device stuck on the live release recovers on its next visit");
+  assert.equal(await install({ version: "0.3.2-0123456789ab" }), 1);
+  assert.equal(await install({ version: "0.3.6-0123456789ab" }), 1);
+  assert.equal(await install({ version: "0.3.6-0123456789ab", abortSafe: true }), 0, "a fixed release keeps the explicit update flow");
+  assert.equal(await install({ version: "0.3.1-0123456789ab" }), 0, "a working older release keeps the explicit update flow");
+  assert.equal(await install({ version: "0.3.5-862cb8bf6c4f" }, { active: false }), 0, "nothing to replace on a first install");
+  assert.equal(await install(null), 0);
+}));
+
+test("a bad waiting release never forces a working active release to hand over its open tabs", () => withoutModernAbortSignal(async () => {
+  const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+  await (await storage.open(prefix + "0.3.1-working")).put(marker, Response.json({ version: "0.3.1-working", installed: 1 }));
+  await (await storage.open(prefix + "0.3.5-waiting")).put(marker, Response.json({ version: "0.3.5-waiting", installed: 2 }));
+  const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+  w.registration.active = activeWorker("0.3.1-working");
+  w.windows.push({ id: "two", url: SCOPE + "#accent" });
+  await w.dispatch("install");
+  assert.equal(w.skipped, 0, "the latest cache belongs to a waiting worker, not the working active worker");
+  assert.equal((await w.message("ASOUND_APPLY_UPDATE")).reason, "tabs");
+  assert.equal(w.skipped, 0, "the explicit multi-tab protection must remain effective");
+  w.windows.pop();
+  assert.equal((await w.message("ASOUND_APPLY_UPDATE")).ok, true);
+  assert.equal(w.skipped, 1, "the normal single-window update still applies");
+}));
+
+test("recovery follows the active marker even when a newer safe waiting snapshot exists", () => withoutModernAbortSignal(async () => {
+  const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+  await (await storage.open(prefix + "0.3.5-broken")).put(marker, Response.json({ version: "0.3.5-broken", installed: 1 }));
+  await (await storage.open(prefix + "0.3.6-waiting")).put(marker, Response.json({ version: "0.3.6-waiting", installed: 2, abortSafe: true }));
+  const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+  w.registration.active = activeWorker("0.3.5-broken");
+  w.windows.push({ id: "two", url: SCOPE });
+  await w.dispatch("install");
+  assert.equal(w.skipped, 1, "an actual broken active release can be recovered for both blocked tabs");
+}));
+
+test("uncertain active identity, timeout, or an active-worker change never triggers forced activation", () => withoutModernAbortSignal(async () => {
+  for (const kind of ["timeout", "send-error", "invalid-reply", "missing-marker", "wrong-cache-name", "active-changed"]) {
+    const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+    if (kind !== "missing-marker") await (await storage.open(prefix + (kind === "wrong-cache-name" ? "other-version" : "0.3.5-old")))
+      .put(marker, Response.json({ version: "0.3.5-old", installed: 1 }));
+    const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+    w.timeoutFor = ms => ms === 3000 ? 10 : ms;
+    w.registration.active = { postMessage(_message, ports) {
+      if (kind === "send-error") throw new Error("active worker is unavailable");
+      if (kind === "timeout") { ports[0].close(); return; }
+      if (kind === "active-changed") w.registration.active = activeWorker("0.3.6-working");
+      ports[0].postMessage({ version: kind === "invalid-reply" ? {} : "0.3.5-old" }); ports[0].close();
+    } };
+    await w.dispatch("install");
+    assert.equal(w.skipped, 0, kind);
+    assert.ok(await (await storage.open(prefix + "0.3.7-fixed")).match(marker), "a conservative decision does not discard the verified waiting release");
+  }
+}));
+
+test("engines with throwIfAborted keep the explicit update flow, and new snapshots are marked abort-safe", async () => {
+  const storage = new CacheStorage();
+  await (await storage.open(prefix + "0.3.5-old")).put(SCOPE + "__asound_release__", Response.json({ version: "0.3.5-old", installed: 1 }));
+  const w = worker("0.3.7-fixed", { "index.html": "page" }, storage);
+  w.registration.active = {};
+  await w.dispatch("install");
+  assert.equal(w.skipped, 0);
+  assert.equal((await (await (await storage.open(prefix + "0.3.7-fixed")).match(SCOPE + "__asound_release__")).json()).abortSafe, true);
 });
 
 test("activation requires one requesting app window and ignores other projects", async () => {

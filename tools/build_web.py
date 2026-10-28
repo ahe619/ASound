@@ -32,6 +32,27 @@ LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/",
                  "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'
+VOICE_RUNTIME_ASSETS = frozenset({
+    "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json",
+    "kokoro/ort-cpu/ort-wasm-simd-threaded.mjs",
+    "kokoro/ort-cpu/ort-wasm-simd-threaded.wasm",
+})
+
+
+def voice_download_asset(name):
+    """Only the current browser voice runtime and individual voice previews."""
+    return name in VOICE_RUNTIME_ASSETS or bool(re.fullmatch(r"audio/voices/(?:af|am)_[a-z]+\.wav", name))
+
+
+def normalize_download_bases(values):
+    if values is None:
+        return []
+    if isinstance(values, str) or not isinstance(values, (list, tuple)) or len(values) > 3:
+        raise ValueError("Download bases must be a list of at most three public HTTPS roots")
+    normalized = [validate_model_base_url(value) for value in values]
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("Download bases must be distinct")
+    return normalized
 
 
 def encode(value):
@@ -88,10 +109,11 @@ def source_files(source):
 
 
 def build(source, output, version, license_file=None, model_base_url=None, model_packs=None,
-          with_web_voice=False, download_web_voice=False):
+          with_web_voice=False, download_web_voice=False, download_bases=None):
     source, output = Path(source).resolve(), Path(output).resolve()
     with_web_voice = with_web_voice or download_web_voice
     model_base_url = validate_model_base_url(model_base_url) if model_base_url is not None else None
+    download_bases = normalize_download_bases(download_bases)
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version):
         raise ValueError("Version must contain 1-64 letters, digits, dots, underscores or hyphens")
     if source == output or output.is_relative_to(source) or source.is_relative_to(output):
@@ -107,12 +129,17 @@ def build(source, output, version, license_file=None, model_base_url=None, model
         for relative, path in source_files(source):
             target = stage / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
+            if relative.as_posix() in VOICE_RUNTIME_ASSETS and relative.suffix in {".js", ".mjs", ".json"}:
+                # Match Linux CI when this checkout uses Windows CRLF. Mirror object
+                # keys must remain usable when prepared locally before a URL is set.
+                target.write_bytes(path.read_bytes().replace(b"\r\n", b"\n"))
+            else:
+                shutil.copyfile(path, target)
         for name in ROOT_FILES:
             if not (stage / name).is_file():
                 raise ValueError(f"Missing required web asset: {name}")
         optional_files = set()
-        if model_base_url or model_packs is not None or with_web_voice:
+        if model_base_url or model_packs is not None or with_web_voice or download_bases:
             catalog_path = stage / "packs.json"
             catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
             if model_packs is not None:
@@ -128,6 +155,8 @@ def build(source, output, version, license_file=None, model_base_url=None, model
                 catalog["defaultSource"] = "deployment"
             if with_web_voice:
                 optional_files = prepare_voice(catalog, source / "models", stage, download=download_web_voice)
+            if download_bases:
+                catalog["downloadBases"] = download_bases
             catalog_path.write_text(encode(catalog) + "\n", encoding="utf-8", newline="\n")
         if license_file:
             shutil.copyfile(license_file, stage / "LICENSES.md")
@@ -139,6 +168,11 @@ def build(source, output, version, license_file=None, model_base_url=None, model
         for asset in assets:
             if asset["url"].startswith(LAZY_PREFIXES):
                 asset["lazy"] = True
+            if download_bases and voice_download_asset(asset["url"]):
+                asset["mirrors"] = [f"{base}/assets/{asset['sha256']}/{asset['url']}" for base in download_bases]
+                asset["size"] = (stage / asset["url"]).stat().st_size
+                if asset["size"] <= 0:
+                    raise ValueError(f"Cannot mirror an empty voice asset: {asset['url']}")
         # Include the worker template: changing only its logic must get a fresh cache.
         release = version + "-" + digest((worker + encode(assets) + version).encode("utf-8"))[:12]
         metadata = encode({"version": release, "appVersion": version}) + "\n"
@@ -173,9 +207,11 @@ def main():
     parser.add_argument("--packs", help="Comma-separated model pack IDs to expose; omit to include all packs")
     parser.add_argument("--with-web-voice", action="store_true", help="Host the verified q8 phone/browser voice as an optional same-origin download")
     parser.add_argument("--download-web-voice", action="store_true", help="Fetch missing pinned voice files before building (implies --with-web-voice)")
+    parser.add_argument("--download-base-url", action="append", help="Optional public HTTPS voice mirror root; repeat up to three times")
     args = parser.parse_args()
     result = build(ROOT / "app", args.out, args.version, ROOT / "LICENSES.md", args.model_base_url, args.packs,
-                   with_web_voice=args.with_web_voice or args.download_web_voice, download_web_voice=args.download_web_voice)
+                   with_web_voice=args.with_web_voice or args.download_web_voice, download_web_voice=args.download_web_voice,
+                   download_bases=args.download_base_url)
     print(f"{result['version']}: {result['files']} assets, {result['bytes'] / 1_000_000:.1f} MB -> {result['output']}")
 
 

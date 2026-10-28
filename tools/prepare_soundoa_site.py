@@ -275,7 +275,7 @@ def replace_outputs(items):
 
 
 def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None,
-            with_web_voice=False, download_web_voice=False):
+            with_web_voice=False, download_web_voice=False, download_bases=None):
     root = checked_path(project_root)
     source = checked_path(root / "app")
     license_file = checked_path(root / "LICENSES.md")
@@ -305,7 +305,8 @@ def prepare(project_root=ROOT, output=None, release_dir=None, archive_path=None,
     (staged_notes / NOTES_MARKER).write_text(MARKER_TEXT, encoding="utf-8")
     try:
         built = build(source, staged_site / "site", version, license_file, model_packs=list(DEFAULT_PACKS),
-                      with_web_voice=with_web_voice or download_web_voice, download_web_voice=download_web_voice)
+                      with_web_voice=with_web_voice or download_web_voice, download_web_voice=download_web_voice,
+                      download_bases=download_bases)
         assets = verify_site(staged_site / "site")
         workflow = staged_site / ".github" / "workflows" / "pages.yml"
         workflow.parent.mkdir(parents=True)
@@ -361,8 +362,10 @@ def main():
     parser.add_argument("--out", type=Path, default=ROOT / "dist" / "soundoa-site")
     parser.add_argument("--with-web-voice", action="store_true", help="Host the verified Kokoro q8 pack as an optional browser download")
     parser.add_argument("--download-web-voice", action="store_true", help="Fetch missing pinned voice files before building (implies --with-web-voice)")
+    parser.add_argument("--download-base-url", action="append", help="Optional public HTTPS voice mirror root; repeat up to three times")
     args = parser.parse_args()
-    result = prepare(output=args.out, with_web_voice=args.with_web_voice, download_web_voice=args.download_web_voice)
+    result = prepare(output=args.out, with_web_voice=args.with_web_voice, download_web_voice=args.download_web_voice,
+                     download_bases=args.download_base_url)
     print(f"{result['release']}: {result['verifiedAssets']} verified website assets -> {result['output']}")
     print(f"{result['archive']} ({result['archiveBytes'] / 1_000_000:.1f} MB)")
     print(f"Prepared only: website not published, DNS not changed; {result['optionalVoiceFiles']} verified optional browser voice files.")

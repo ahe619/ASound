@@ -13,6 +13,15 @@ const deferred = () => {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
+// Safari before 15.4 and Chromium before 100 have neither AbortSignal.throwIfAborted nor AbortSignal.reason.
+async function withoutModernAbortSignal(run) {
+  const proto = AbortSignal.prototype;
+  const saved = ["throwIfAborted", "reason"].map((name) => [name, Object.getOwnPropertyDescriptor(proto, name)]);
+  delete proto.throwIfAborted;
+  Object.defineProperty(proto, "reason", { configurable: true, get: () => undefined });
+  try { return await run(); } finally { for (const [name, descriptor] of saved) Object.defineProperty(proto, name, descriptor); }
+}
+
 async function until(check, message) {
   for (let i = 0; i < 50; i++) {
     if (check()) return;
@@ -85,7 +94,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
     env.partials.set(keyFor(data.packs.find((p) => p.id === id).files[0]), bytes);
   }
   const context = {
-    URL, URLSearchParams, Response, AbortController, performance, setTimeout, clearTimeout,
+    URL, URLSearchParams, Response, AbortController, DOMException, performance, setTimeout, clearTimeout,
     location: { search: "", href: "https://app.test/ASound/" },
     console: { warn: (...args) => env.warnings.push(args) },
     navigator: {
@@ -176,6 +185,56 @@ test("a voice source revision changes cache identity and does not treat old unve
   const desktop = await fixture({ data: hostedVoiceCatalog(), desktop: true });
   assert.equal(desktop.api.hostedVoice(), false);
   assert.equal((await desktop.api.engineConfig("voice")).base, "https://app.test/ASound/models/");
+});
+
+test("configured voice mirrors precede the original website without changing inference or other packs", async () => {
+  const data = hostedVoiceCatalog();
+  data.downloadBases = ["https://download.test/asound/", "https://backup.test", "https://download.test/asound"];
+  const voice = data.packs.find(p => p.id === "voice");
+  voice.files[0].sha256 = "a".repeat(64);
+  const env = await fixture({ data, mobile: true });
+  const cfg = await env.api.engineConfig("voice");
+  assert.equal(cfg.base, "https://app.test/ASound/voice-models/abcdef0123456789/");
+  const canonical = env.api.canonKey(voice.files[0]);
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "mirrored voice should install");
+  const path = "voice-models/abcdef0123456789/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx";
+  assert.deepEqual(Array.from(env.downloads[0].urls), ["https://download.test/asound/" + path, "https://backup.test/" + path, "https://app.test/ASound/" + path]);
+  assert.equal(env.downloads[0].key, canonical);
+  assert.equal(env.downloads[0].file.sha256, "a".repeat(64));
+  assert.equal(env.saved, 0);
+  assert.equal(env.requests.some(r => r.url.startsWith("https://hf.test") || r.url.startsWith("https://mirror.test")), false);
+  assert.equal(env.api.fileUrl(data.packs.find(p => p.id === "asr-tiny").files[0], "hf"), "https://hf.test/test/asr-tiny/resolve/main/config.json");
+
+  // A later deployment may add, replace or remove a mirror. The installed bytes remain usable.
+  const keys = [...env.cache.entries.keys()];
+  data.downloadBases = ["https://new-download.test/files"];
+  await env.api.initPacks({ readOnly: true });
+  assert.equal(env.api.packStatus("voice").state, "installed");
+  await env.api.install("voice");
+  await flush();
+  assert.equal(env.downloads.length, 1, "a new mirror must not invalidate downloaded weights");
+  assert.deepEqual([...env.cache.entries.keys()], keys);
+});
+
+test("invalid operator mirror URLs are rejected and desktop configuration is unaffected", async () => {
+  for (const values of [null, "https://download.test", ["http://download.test"], ["https://user:secret@download.test"],
+    ["https://download.test/?token=secret"], ["https://download.test/#part"], ["https://download.test/a/../b"],
+    ["https://download.test/a/%252e%252e/b"], ["//download.test/a"], ["https://download.test/a%5cb"],
+    ["https://download.test/a%0ab"], ["https://download.test:0"], ["https://download.test", "https://a.test", "https://b.test", "https://c.test"]]) {
+    await assert.rejects(fixture({ data: { ...hostedVoiceCatalog(), downloadBases: values } }), /Invalid download mirror/);
+  }
+  const desktop = await fixture({ data: { ...hostedVoiceCatalog(), downloadBases: ["https://download.test/files"] }, desktop: true });
+  assert.equal(desktop.api.packMode(), "desktop");
+  assert.equal((await desktop.api.engineConfig("voice")).base, "https://app.test/ASound/models/");
+});
+
+test("voice mirrors require pinned hashes before requesting any model bytes", async () => {
+  const env = await fixture({ data: { ...hostedVoiceCatalog(), downloadBases: ["https://download.test"] } });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "partial", "unverified mirror download must fail");
+  assert.equal(env.downloads.length, 0);
+  assert.match(env.api.packStatus("voice").error, /SHA-256/);
 });
 
 test("hosted voice source refuses absolute URLs and traversal instead of redirecting model downloads", async () => {
@@ -507,6 +566,29 @@ test("cancelling a runtime fetch aborts it, preserves the weights, and allows a 
   await env.api.install("voice");
   await until(() => env.api.packStatus("voice").state === "installed", "cancelled runtime can be retried");
   assert.equal(env.downloads.length, 1);
+});
+
+test("packs install and cancel on older engines without AbortSignal.throwIfAborted or reason", () => withoutModernAbortSignal(async () => {
+  const download = async (args) => {
+    if (args.signal.aborted) throw new Error("cancelled");
+    await args.cache.put(args.key, new Response(new Uint8Array(args.file.size)));
+    args.onBytes(args.file.size);
+  };
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, download });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "the pack must finish on Safari before 15.4");
+  assert.deepEqual(env.runtimeRequests, VOICE_RUNTIME);
+  const waiting = await fixture({ release: "test-v1", controlled: false, prefs: { source: "hf" }, download });
+  await waiting.api.install("voice");
+  await until(() => waiting.swEvents.size === 1, "waiting for the first controller");
+  await waiting.api.cancel("voice");
+  assert.equal(waiting.api.packStatus("voice").state, "partial");
+  assert.equal(waiting.api.packStatus("voice").error, undefined, "a cancel is not reported as a failure");
+  assert.deepEqual(waiting.runtimeRequests, []);
+}));
+
+test("no AbortSignal.throwIfAborted call is left in packs.js", () => {
+  assert.doesNotMatch(source, /\.throwIfAborted\s*\(/);
 });
 
 test("startup repairs old weight-only packs in the serial queue without blocking initialization", async () => {

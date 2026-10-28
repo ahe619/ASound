@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from tools.build_web import ASSETS_LINE, RELEASE_LINE, build, validate_model_base_url
+from tools.build_web import ASSETS_LINE, RELEASE_LINE, VOICE_RUNTIME_ASSETS, build, validate_model_base_url
 
 
 class WebBuildTests(unittest.TestCase):
@@ -151,6 +151,48 @@ class WebBuildTests(unittest.TestCase):
         published = json.loads((self.out / "packs.json").read_text())
         self.assertEqual(published["sources"], original["sources"])
         self.assertNotIn("defaultSource", published)
+
+    def test_voice_mirrors_keep_same_origin_integrity_and_exclude_other_assets(self):
+        for name in VOICE_RUNTIME_ASSETS | {"audio/voices/af_heart.wav", "audio/other.wav", "vendor/transformers/model.wasm"}:
+            self.put(name, "fixture " + name)
+        baseline = build(self.app, self.out, "0.2.0")
+        worker = (self.out / "sw.js").read_text()
+        self.assertNotIn('"mirrors":', worker)
+        self.assertNotIn('"size":', worker)
+        self.assertNotIn("downloadBases", json.loads((self.out / "packs.json").read_text()))
+        bases = ["https://downloads.example.com/asound/", "https://backup.example.com"]
+        result = build(self.app, self.out, "0.2.0", download_bases=bases)
+        self.assertNotEqual(result["version"], baseline["version"])
+        from tools.prepare_soundoa_site import verify_site
+        assets = verify_site(self.out)
+        mirrored = {asset["url"] for asset in assets if "mirrors" in asset}
+        self.assertEqual(mirrored, VOICE_RUNTIME_ASSETS | {"audio/voices/af_heart.wav"})
+        for asset in assets:
+            self.assertEqual(asset["sha256"], hashlib.sha256((self.out / asset["url"]).read_bytes()).hexdigest())
+            if asset["url"] in mirrored:
+                self.assertEqual(asset["mirrors"], [f"{base.rstrip('/')}/assets/{asset['sha256']}/{asset['url']}" for base in bases])
+                self.assertTrue(asset["lazy"])
+                self.assertEqual(asset["size"], (self.out / asset["url"]).stat().st_size)
+            else:
+                self.assertNotIn("size", asset)
+        self.assertEqual(json.loads((self.out / "packs.json").read_text())["downloadBases"], [base.rstrip("/") for base in bases])
+        self.assertEqual(json.loads((self.app / "packs.json").read_text()), {})
+
+    def test_bad_download_bases_preserve_existing_release(self):
+        baseline = build(self.app, self.out, "0.2.0")["version"]
+        cases = ["https://example.com", ["https://a.example"] * 4,
+                 ["https://example.com", "https://example.com/"], ["http://public.example.com"],
+                 ["https://user:secret@example.com"], ["https://example.com/?token=secret"],
+                 ["https://example.com/#x"], ["https://example.com/%2e%2e"], [None]]
+        for bases in cases:
+            with self.subTest(bases=bases), self.assertRaises(ValueError):
+                build(self.app, self.out, "0.2.1", download_bases=bases)
+        self.assertEqual(json.loads((self.out / "version.json").read_text())["version"], baseline)
+
+    def test_three_download_bases_and_loopback_test_root(self):
+        bases = ["https://one.example", "https://two.example", "http://127.0.0.1:8783/"]
+        build(self.app, self.out, "0.2.0", download_bases=bases)
+        self.assertEqual(len(json.loads((self.out / "packs.json").read_text())["downloadBases"]), 3)
 
 
 if __name__ == "__main__":

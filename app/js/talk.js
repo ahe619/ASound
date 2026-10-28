@@ -1244,7 +1244,10 @@ export function initTalk() {
     // Browser/system Back and tab changes must invalidate both the feedback
     // wait and the summary request, just like the explicit Back to chat button.
     if (state.tab !== "talk" || state.talkView !== "summary") cancelSummary();
+    window.ASoundMic?.cancel?.(); // the placement result's voice card can be recording
   });
+  // The debrief card on talk home has a microphone too.
+  registerViewCleanup("talk", "home", () => { window.ASoundMic?.cancel?.(); });
   registerViewCleanup("talk", "chat", () => {
     // Returning home or opening another page pauses the microphone without
     // erasing the conversation. A late model reply may save text, never autoplay.
