@@ -2,7 +2,7 @@
 import { state } from "./state.js";
 import { $ } from "./util.js";
 
-const TABS = ["talk", "accent", "vocab", "me"];
+export const TABS = ["talk", "accent", "vocab", "models", "me"];
 const renderers = {};
 const cleanups = {};
 const details = {};
@@ -28,7 +28,7 @@ export const isNewNavigationVisit = () => !initialEntry;
 function readEntry(value) {
   const item = value?.[NAV_KEY];
   return item?.version === 1 && typeof item.id === "string"
-    && [...TABS, "models", "mode"].includes(item.route?.tab) ? item : null;
+    && [...TABS, "mode"].includes(item.route?.tab) ? item : null;
 }
 
 function routeKey(route) { return JSON.stringify(route); }
@@ -107,7 +107,7 @@ export function initNavigation() {
 }
 
 export function navigate(route, { replace = false } = {}) {
-  if (![...TABS, "models", "mode"].includes(route.tab)) route = { tab: "talk" };
+  if (![...TABS, "mode"].includes(route.tab)) route = { tab: "talk" };
   route = { ...route };
   if (!started) {
     pendingRoute = route;
@@ -154,7 +154,7 @@ export function show() {
   $("#view-talk-home").hidden = !(talk && state.talkView === "home");
   $("#view-chat").hidden = !(talk && state.talkView === "chat");
   $("#view-summary").hidden = !(talk && state.talkView === "summary");
-  for (const tab of [...TABS.slice(1), "models", "mode"]) $("#view-" + tab).hidden = state.tab !== tab;
+  for (const tab of [...TABS.slice(1), "mode"]) $("#view-" + tab).hidden = state.tab !== tab;
   for (const tab of TABS) $("#tab-" + tab).setAttribute("aria-selected", String(state.tab === tab));
 }
 

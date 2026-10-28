@@ -7,7 +7,7 @@ import { speak, speakBtn, voicePreviewBtn, unlockAudio, speechStatus, onSpeechSt
 import { aiStatus } from "./ai.js";
 import { voicePicker, disclosure } from "./widgets.js";
 import { activePacks, packById, packStatus, variant, onPacks } from "./packs.js";
-import { showModels, voiceDownloadCard } from "./models.js";
+import { voiceDownloadCard } from "./models.js";
 import { getLayoutMode, setLayoutMode, layoutInfo, onLayoutChange } from "./device.js";
 import { updateStatus, onUpdateStatus, checkForUpdates, applyUpdate } from "./updates.js";
 import { currentRoute, navigate, goBack, registerOverlay } from "./nav.js";
@@ -118,8 +118,6 @@ function render() {
         select("layout-mode", ["auto", "phone", "tablet", "desktop"].map(id => [id, t(`settings.layout.${id}`)]), getLayoutMode(), setLayoutMode),
         h("p", { class: "hint-line", id: "layout-status" }))
     ], { note: t("ui.appearanceSettingsNote") }),
-    h("button", { type: "button", class: "settings-link", onclick: () => showModels() },
-      icon("box"), h("span", null, t("settings.models")), icon("download")),
     disclosure("settings-app", t("updates.title"), [
       h("section", { class: "stack-xs", id: "app-updates", "aria-live": "polite" }),
       disclosure("settings-status", t("settings.engines"), [

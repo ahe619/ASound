@@ -2,7 +2,7 @@
 import { prefs, state } from "./state.js";
 import { $, h } from "./util.js";
 import { setLanguage, applyI18n, t } from "./i18n.js";
-import { registerTab, registerTabCleanup, setTab, show, initNavigation, navigate, currentRoute } from "./nav.js";
+import { TABS, registerTab, registerTabCleanup, setTab, show, initNavigation, navigate, currentRoute } from "./nav.js";
 import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent, cleanupAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
@@ -59,7 +59,7 @@ async function boot() {
   });
   registerTab("me", renderMe);
   registerTabCleanup("me", () => window.ASoundMic?.cancel?.()); // "Find a voice like yours" records on Me
-  for (const tab of ["talk", "accent", "vocab", "me"]) $("#tab-" + tab).addEventListener("click", () => setTab(tab));
+  for (const tab of TABS) $("#tab-" + tab).addEventListener("click", () => setTab(tab));
 
   initTalk();
   initAccent();
@@ -76,7 +76,7 @@ async function boot() {
   const hosted = location.protocol === "https:" && !inAppShell;
   const engines = startEngines(renderModels);
   const landing = location.hash.slice(1); // read before navigation writes its own entry
-  const firstTab = ["talk", "accent", "vocab", "me"].includes(landing) ? landing : "vocab";
+  const firstTab = TABS.includes(landing) ? landing : "vocab";
   let landingState = null;
   if (hosted) {
     setTab(firstTab);
@@ -99,7 +99,7 @@ async function boot() {
   const start = () => {
     resumeIfRecent();
     const hash = location.hash.slice(1);
-    if (["accent", "vocab", "me"].includes(hash)) setTab(hash);
+    if (TABS.includes(hash) && hash !== "talk") setTab(hash);
     show();
     warmUp();
     // Load speech recognition once the first screen is up, not in the middle of it.
@@ -107,13 +107,13 @@ async function boot() {
     if (window.ASoundMic && !deviceInfo().mobile) idle(() => window.ASoundMic.preload(), { timeout: 4000 });
   };
   // Web visitors can study words and use available system voices immediately.
-  // Optional conversation resources remain accessible from the settings screen.
+  // Optional resources are available directly from the Models tab.
   if (hosted) {
     if (ready()) {
       // A conversation from the last half hour comes back, as before, unless the address named another tab or
       // the learner has already moved on while the packs were checked.
       if (state.tab === firstTab && history.state === landingState && !isVocabPracticing()
-          && !["accent", "vocab", "me"].includes(landing)) resumeIfRecent();
+          && !(TABS.includes(landing) && landing !== "talk")) resumeIfRecent();
       const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
       idle(() => warmUp(), { timeout: 4000 });
       if (window.ASoundMic && !deviceInfo().mobile) idle(() => window.ASoundMic.preload(), { timeout: 4000 });
@@ -122,7 +122,7 @@ async function boot() {
   else if (ready()) start();
   else if (packMode() === "web") {
     const hash = location.hash.slice(1);
-    setTab(["talk", "accent", "vocab", "me"].includes(hash) ? hash : "vocab");
+    setTab(TABS.includes(hash) ? hash : "vocab");
   }
   else {
     showModels({ setup: true, onReady: start });

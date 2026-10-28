@@ -84,11 +84,19 @@ const server = http.createServer((req, res) => {
     await page.locator('#settings-appearance').getByRole('button', { name: 'Dark', exact: true }).click();
     assert.equal(await page.evaluate(() => ASoundTheme.getMode()), 'dark');
     await page.locator('#settings-appearance').getByRole('button', { name: 'Light', exact: true }).click();
-    await page.locator('.settings-link').click();
+    assert.equal(await page.locator('#settings .settings-link').count(), 0);
+    await page.click('#settings-close');
+    await page.click('#tab-models');
     await page.locator('#view-models:not([hidden])').waitFor();
+    assert.equal(await page.locator('#tab-models').getAttribute('aria-selected'), 'true');
+    await page.reload();
+    await page.locator('#models .pack').first().waitFor();
+    assert.equal(await page.locator('#tab-models').getAttribute('aria-selected'), 'true');
     await page.goBack();
+    await page.locator('#check-start').waitFor();
+    await page.click('#settings-open');
     await page.locator('#settings:not([hidden])').waitFor();
-    assert.equal(await page.locator('#settings-learning').evaluate(el => el.open), true);
+    await open('settings-learning');
     assert.equal(await page.locator('#help-lang').inputValue(), 'es');
     await page.selectOption('#ui-lang', 'zh');
     await page.waitForFunction(() => document.querySelector('#settings-title').textContent === '设置');
@@ -101,7 +109,7 @@ const server = http.createServer((req, res) => {
       await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
       for (const mode of ['light', 'dark']) {
         await page.evaluate(mode => ASoundTheme.setMode(mode), mode);
-        for (const tab of ['talk', 'accent', 'vocab', 'me']) {
+        for (const tab of ['talk', 'accent', 'vocab', 'models', 'me']) {
           await page.click('#tab-' + tab);
           assert.equal(await page.evaluate(() => {
             const view = document.querySelector('.view:not([hidden])');

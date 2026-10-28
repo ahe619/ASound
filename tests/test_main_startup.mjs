@@ -88,3 +88,12 @@ test("hosted desktop browsers preload speech recognition when idle, phones do no
   await phone.finish();
   assert.equal(phone.calls.preloaded, 0);
 });
+
+test("the Models link stays selected when model checks finish despite a recent conversation", async () => {
+  const app = await boot({ hash: "#models", recent: true });
+  assert.equal(app.state.tab, "models");
+  await app.finish();
+  assert.equal(app.state.tab, "models");
+  assert.equal(app.calls.resumed, 0);
+  assert.equal(app.el("#view-models").hidden, false);
+});
