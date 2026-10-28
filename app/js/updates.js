@@ -39,23 +39,29 @@ function message(worker, type, timeout = 3000) {
 
 async function syncStatus() {
   if (!registration || requested) return updateStatus();
+  if (registration.installing) return set({ state: "downloading" });
   if (registration.waiting) {
     const worker = registration.waiting;
     const info = await message(worker, "ASOUND_VERSION").catch(() => ({}));
     if (requested || registration.waiting !== worker) return updateStatus();
+    if (registration.installing) return set({ state: "downloading" });
     return set({ state: "available", nextVersion: info.version || "" });
   }
-  if (registration.installing) return set({ state: "downloading" });
   return set({ state: "current", nextVersion: "" });
 }
 
 function watch(worker) {
   if (!worker || watched.has(worker)) return;
   watched.add(worker);
+  let succeeded = ["installed", "activating", "activated"].includes(worker.state);
   worker.addEventListener("statechange", () => {
     if (worker.state === "redundant") {
-      if (!requested) set({ state: "error", reason: "download", error: "The update could not be installed. The previous version is still available." });
-    } else if (worker.state === "installed" || worker.state === "activated") syncStatus();
+      // Replacing an older waiting (or active) worker is normal, not a failed download.
+      if (!succeeded && !requested) set({ state: "error", reason: "download", error: "The update could not be installed. The previous version is still available." });
+    } else if (["installed", "activating", "activated"].includes(worker.state)) {
+      succeeded = true;
+      syncStatus();
+    }
   });
   if (worker.state === "installing") set({ state: "downloading" });
 }
@@ -140,11 +146,11 @@ export async function checkForUpdates() {
     return updateStatus();
   }
   if (requested) return updateStatus();
-  if (registration.waiting) return syncStatus();
   checking = (async () => {
     lastCheck = Date.now();
     set({ state: "checking" });
     try {
+      // A waiting release may itself be outdated. Check the server before offering it again.
       await registration.update();
       const worker = registration.installing;
       watch(worker);

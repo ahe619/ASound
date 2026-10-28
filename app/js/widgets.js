@@ -3,7 +3,7 @@ import { prefs, savePrefs } from "./state.js";
 import { h, fill, icon, toast } from "./util.js";
 import { t, getLanguage } from "./i18n.js";
 import { vocab, voiceF0 } from "./store.js";
-import { VOICES, recommendVoices, speak, unlockAudio, voiceById } from "./speech.js";
+import { VOICES, recommendVoices, voiceById, voicePreviewBtn } from "./speech.js";
 // (paintSpeak handles the play/stop icon on preview buttons through speak())
 import { micButton } from "./mic.js";
 import { medianF0 } from "./pitch.js";
@@ -49,13 +49,11 @@ export const repaintSaveButtons = () => document.querySelectorAll(".save-btn").f
 
 /* voice picker: every voice with a preview, the chosen one marked */
 export function voicePicker(onPick) {
-  const sample = "Hey! I'm gonna help you practice your American accent. Let's get started.";
   const grid = h("div", { class: "grid voice-grid" });
   const paint = () => {
     fill(grid, VOICES.map((v) => {
       const chosen = v.id === prefs.voice;
-      const play = h("button", { type: "button", class: "icon-btn sm", "aria-label": t("voice.preview"), title: t("voice.preview") }, icon("speaker"));
-      play.addEventListener("click", (e) => { e.stopPropagation(); unlockAudio(); speak(sample, play, 1, null, v.id); });
+      const play = voicePreviewBtn(v.id);
       const card = h("div", { class: "opt voice-opt", role: "button", tabindex: "0", "aria-pressed": String(chosen) },
         h("div", { class: "row" }, h("span", { class: "opt-en", lang: "en" }, v.name), play),
         h("span", { class: "opt-desc" }, t(`voice.${v.id}`)),
@@ -82,8 +80,7 @@ export function voiceRecommendCard() {
       h("ul", { class: "plain" }, recs.map((v, i) => {
         const use = h("button", { type: "button", class: "mini" + (prefs.voice === v.id ? " done" : "") }, prefs.voice === v.id ? t("voice.inUse") : t("voice.use"));
         use.addEventListener("click", () => { prefs.voice = v.id; savePrefs(); toast(t("voice.switched", { name: v.name })); showRecs(f0); });
-        const play = h("button", { type: "button", class: "icon-btn sm", "aria-label": t("voice.preview") }, icon("speaker"));
-        play.addEventListener("click", () => { unlockAudio(); speak(prompt, play, 1, null, v.id); });
+        const play = voicePreviewBtn(v.id);
         return h("li", { class: "row" }, h("strong", { lang: "en" }, `${i + 1}. ${v.name}`), h("span", { class: "hint-line" }, `${t(`voice.${v.id}`)} \u00b7 ${v.f0} Hz`), play, use);
       })),
       h("p", { class: "hint-line" }, t("voice.recWhy")));

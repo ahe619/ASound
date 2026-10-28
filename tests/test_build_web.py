@@ -32,6 +32,8 @@ class WebBuildTests(unittest.TestCase):
         self.put("dev/demo.html", "never publish test pages")
         self.put("vendor/engine.wasm", "wasm bytes")
         self.put("vendor/LICENSE.txt", "license notice")
+        self.put("audio/voices/af_heart.wav", "audio bytes")
+        self.put("repair.html", "<!doctype html><title>Check updates</title>")
         self.put("vocabulary/words.json", '{"schemaVersion":1,"words":[]}')
         self.put("vocabulary/LICENSE-ECDICT.txt", "dictionary license")
         self.put(".env", "never publish secrets")
@@ -45,6 +47,8 @@ class WebBuildTests(unittest.TestCase):
         self.assertIn("vocabulary/words.json", urls)
         self.assertIn("vocabulary/LICENSE-ECDICT.txt", urls)
         self.assertIn("version.json", urls)
+        self.assertIn("audio/voices/af_heart.wav", urls)
+        self.assertIn("repair.html", urls)
         self.assertNotIn("sw.js", urls)
         self.assertFalse((self.out / "models").exists())
         self.assertFalse((self.out / "dev").exists())
@@ -55,6 +59,7 @@ class WebBuildTests(unittest.TestCase):
         # Runtimes are cached on first use; the app shell and word lists are installed up front.
         lazy = {item["url"] for item in assets if item.get("lazy")}
         self.assertIn("vendor/engine.wasm", lazy)
+        self.assertIn("audio/voices/af_heart.wav", lazy)
         self.assertNotIn("js/main.js", lazy)
         self.assertNotIn("vocabulary/words.json", lazy)
 

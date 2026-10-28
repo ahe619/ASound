@@ -44,7 +44,7 @@ async function boot({ hash = "", entry = null, recent = false, practicing = () =
   context.resumeIfRecent = () => { calls.resumed++; if (recent) context.resumeSession(); };
   for (const name of ["initLayout", "initTalk", "initAccent", "initSettings", "onStoreChange", "renderTalkHome",
     "renderAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels", "paintVocabCount", "repaintSaveButtons",
-    "initUpdates", "warmUp", "showModels", "applyI18n"])
+    "initUpdates", "initSpeechFeedback", "warmUp", "showModels", "applyI18n"])
     context[name] = noop;
   vm.runInContext(navSource, context);
   vm.runInContext(mainSource, context);

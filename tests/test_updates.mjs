@@ -120,6 +120,96 @@ test("manual checks remain pending until the new worker finishes installing", as
   assert.equal(env.reloaded, 0);
 });
 
+test("a waiting release can be replaced by the latest release without a false failure or reload", async () => {
+  const env = app();
+  const states = [];
+  env.api.onUpdateStatus((state) => states.push(state));
+  await env.api.initUpdates();
+  let updateCalls = 0;
+  const checkRelease = async (version, superseded = null) => {
+    const worker = new Worker();
+    worker.version = version;
+    worker.state = "installing";
+    env.registration.update = async () => {
+      updateCalls++;
+      env.registration.installing = worker;
+      env.registration.emit("updatefound");
+    };
+    const checking = env.api.checkForUpdates();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(env.api.updateStatus().state, "downloading");
+    env.registration.installing = null;
+    env.registration.waiting = worker;
+    if (superseded) {
+      superseded.state = "redundant";
+      superseded.emit("statechange");
+    }
+    worker.state = "installed";
+    worker.emit("statechange");
+    assert.equal((await checking).nextVersion, version);
+    return worker;
+  };
+  const two = await checkRelease("two");
+  const three = await checkRelease("three", two);
+  assert.equal(updateCalls, 2, "checking must reach the server even with an older waiting release");
+  assert.equal(env.api.updateStatus().version, "one", "the running page stays on its current snapshot");
+  assert.equal(states.some((state) => state.state === "error"), false, "replacement must not briefly report a failed install");
+  assert.equal(env.reloaded, 0);
+  await env.api.applyUpdate();
+  assert.equal(two.applied, 0);
+  assert.equal(three.applied, 1);
+  env.serviceWorker.emit("controllerchange");
+  assert.equal(env.reloaded, 1);
+});
+
+test("unchanged or failed checks preserve the already downloaded waiting release", async () => {
+  const worker = new Worker();
+  const env = app({ waiting: worker });
+  await env.api.initUpdates();
+  let updateCalls = 0;
+  env.registration.update = async () => { updateCalls++; };
+  assert.equal((await env.api.checkForUpdates()).nextVersion, "two");
+  assert.equal(updateCalls, 1);
+  env.registration.update = async () => { throw new Error("offline"); };
+  const failed = await env.api.checkForUpdates();
+  assert.equal(failed.state, "error");
+  assert.equal(failed.nextVersion, "two");
+  assert.equal(env.registration.waiting, worker);
+  assert.equal((await env.api.applyUpdate()).state, "applying");
+  assert.equal(worker.applied, 1);
+  assert.equal(env.reloaded, 0);
+});
+
+test("a late version reply from an older waiting worker cannot hide a newer download", async () => {
+  const old = new Worker();
+  const env = app({ waiting: old });
+  await env.api.initUpdates();
+  let reply;
+  old.postMessage = (_data, ports) => { reply = ports[0]; };
+  env.serviceWorker.emit("controllerchange");
+  assert.ok(reply);
+  const worker = new Worker();
+  worker.version = "three";
+  worker.state = "installing";
+  env.registration.update = async () => {
+    env.registration.installing = worker;
+    env.registration.emit("updatefound");
+  };
+  const check = env.api.checkForUpdates();
+  await new Promise((resolve) => setImmediate(resolve));
+  const lateStatus = new Promise((resolve) => {
+    const stop = env.api.onUpdateStatus((state) => { stop(); resolve(state); });
+  });
+  reply.postMessage({ version: "two" });
+  reply.close();
+  assert.equal((await lateStatus).state, "downloading");
+  env.registration.installing = null;
+  env.registration.waiting = worker;
+  worker.state = "installed";
+  worker.emit("statechange");
+  assert.equal((await check).nextVersion, "three");
+});
+
 test("failed installs report an error and never reload", async () => {
   const env = app();
   await env.api.initUpdates();

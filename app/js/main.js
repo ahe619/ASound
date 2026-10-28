@@ -11,6 +11,7 @@ import { initSettings } from "./settings.js";
 import { onStoreChange } from "./store.js";
 import { repaintSaveButtons } from "./widgets.js";
 import { warmUp } from "./speech.js";
+import { initSpeechFeedback } from "./speech-ui.js";
 import { ready, packMode } from "./packs.js";
 import { initUpdates } from "./updates.js";
 import { startEngines } from "./engines.js";
@@ -45,6 +46,7 @@ function startNavigation() {
 async function boot() {
   initLayout();
   await Promise.all([setLanguage(prefs.uiLang), initModes()]);
+  initSpeechFeedback();
   syncLabels();
   registerTab("talk", () => { if (state.talkView === "home") renderTalkHome(); });
   registerTab("accent", renderAccent);

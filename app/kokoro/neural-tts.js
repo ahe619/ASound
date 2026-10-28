@@ -51,14 +51,14 @@ self.onmessage = async (e) => {
     // One inference at a time on the shared WASM session. Validate the requested
     // audio instead of spending the first playback on an extra test sentence.
     generationQueue = generationQueue.then(async () => {
+      const t0 = performance.now();
       try {
-        const t0 = performance.now();
         const out = await tts.generate(m.text, { voice: m.voice, speed: m.speed });
         const pcm = out.audio;
         if (invalidAudio(pcm)) throw new Error("the voice model produced invalid audio on this device");
         postMessage({ type: "audio", id: m.id, pcm, sr: out.sampling_rate, ms: Math.round(performance.now() - t0) }, [pcm.buffer]);
       } catch (err) {
-        postMessage({ type: "genError", id: m.id, error: String((err && err.message) || err) });
+        postMessage({ type: "genError", id: m.id, error: String((err && err.message) || err), ms: Math.round(performance.now() - t0) });
       }
     });
   }
@@ -68,8 +68,11 @@ self.onmessage = async (e) => {
 let worker = null;
 let readyPromise = null;
 let rejectStart = null;
+let startTimer = null;
 let revision = 0;
 let where = { mode: "desktop" };
+const INIT_TIMEOUT_MS = 120000;
+const GENERATION_TIMEOUT_MS = 120000;
 
 // Where the files are (from js/packs.js): {mode: "desktop"} or {mode: "web", base, cache, canon}.
 export function configure(cfg) {
@@ -84,6 +87,10 @@ let lastError = "";
 let engine = "";
 let seq = 0;
 const pending = new Map();
+const jobs = [];
+let currentJob = null;
+let initMs = null;
+let generationMs = null;
 const listeners = new Set();
 const cache = new Map();      // `${voice}|${speed}|${text}` -> {pcm, sr}
 const inFlight = new Map();   // identical pending requests share one inference
@@ -92,23 +99,96 @@ let cacheBytes = 0;
 
 function reset(error) {
   revision++;
+  clearTimeout(startTimer);
+  startTimer = null;
   if (worker) { try { worker.terminate(); } catch {} }
   worker = null;
   if (rejectStart) rejectStart(error);
   rejectStart = null;
   readyPromise = null;
-  for (const p of pending.values()) p.reject(error);
+  for (const p of pending.values()) {
+    clearTimeout(p.timer);
+    p.signal?.removeEventListener("abort", p.abort);
+    p.reject(error);
+  }
   pending.clear();
+  jobs.length = 0;
+  currentJob = null;
   inFlight.clear();
   cache.clear();
   cacheBytes = 0;
   state = "off";
   engine = "";
   lastError = "";
+  initMs = null;
+  generationMs = null;
+}
+
+function failWorker(error) {
+  reset(error);
+  state = "error";
+  lastError = error.message;
+  emit();
+}
+
+const cancelled = () => Object.assign(new Error("voice synthesis cancelled"), { name: "AbortError", code: "cancelled" });
+const timedOut = (phase) => Object.assign(new Error(`Voice ${phase} timed out after 120 seconds. Retry or use basic speech.`), {
+  code: phase === "initialization" ? "voice_init_timeout" : "voice_generation_timeout",
+});
+
+// Cancelling one caller during the shared initialization must not reject the
+// other callers or restart a worker which is still making progress.
+function waitForLoad(signal) {
+  if (signal?.aborted) return Promise.reject(cancelled());
+  const loading = load();
+  if (!signal) return loading;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(cancelled());
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    loading.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+function pump() {
+  if (currentJob || !jobs.length || !worker || state !== "ready") return;
+  const job = jobs.shift();
+  currentJob = job;
+  job.timer = setTimeout(() => {
+    if (currentJob === job) failWorker(timedOut("generation"));
+  }, GENERATION_TIMEOUT_MS);
+  try { worker.postMessage({ type: "gen", id: job.id, text: job.text, voice: job.voice, speed: job.speed }); }
+  catch (error) { failWorker(error); return; }
+  emit();
+}
+
+function generate(text, voice, speed, signal) {
+  if (signal?.aborted) return Promise.reject(cancelled());
+  return new Promise((resolve, reject) => {
+    const job = { id: ++seq, text, voice, speed, signal, resolve, reject, cancelled: false, timer: null, abort: null };
+    job.abort = () => {
+      job.cancelled = true;
+      // ONNX cannot stop a running inference. Keep that slot until its reply,
+      // discard its audio, and never send cancelled queued work to the worker.
+      if (currentJob !== job) {
+        const at = jobs.indexOf(job);
+        if (at >= 0) jobs.splice(at, 1);
+        pending.delete(job.id);
+      }
+      signal.removeEventListener("abort", job.abort);
+      reject(cancelled());
+    };
+    pending.set(job.id, job);
+    jobs.push(job);
+    signal?.addEventListener("abort", job.abort, { once: true });
+    if (signal?.aborted) job.abort();
+    pump();
+  });
 }
 
 function remember(key, out) {
   if (out.pcm.byteLength > MAX_CACHE_BYTES) return;
+  if (cache.has(key)) { cacheBytes -= cache.get(key).pcm.byteLength; cache.delete(key); }
   cache.set(key, out);
   cacheBytes += out.pcm.byteLength;
   while (cache.size > 150 || cacheBytes > MAX_CACHE_BYTES) {
@@ -120,7 +200,10 @@ function remember(key, out) {
 
 const emit = () => listeners.forEach((fn) => { try { fn(status()); } catch {} });
 export function onStatus(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-export function status() { return { state, error: lastError, engine, loaded: state === "ready" ? 1 : 0, total: 1 }; }
+export function status() {
+  return { state, error: lastError, engine, loaded: state === "ready" ? 1 : 0, total: 1,
+    initMs, generationMs, generating: !!currentJob };
+}
 export function dispose() {
   reset(new Error("voice removed"));
   emit();
@@ -134,26 +217,37 @@ function start(device, dtype) {
     finally { URL.revokeObjectURL(url); }
     worker = current;
     rejectStart = reject;
+    startTimer = setTimeout(() => { if (worker === current) failWorker(timedOut("initialization")); }, INIT_TIMEOUT_MS);
     current.onmessage = (e) => {
       if (worker !== current) return;
       const m = e.data;
-      if (m.type === "ready") { rejectStart = null; resolve(m); }
-      else if (m.type === "error") reject(new Error(m.error));
+      if (m.type === "ready") {
+        clearTimeout(startTimer);
+        startTimer = null;
+        rejectStart = null;
+        resolve(m);
+      }
+      else if (m.type === "error") failWorker(new Error(m.error));
       else if (m.type === "audio" || m.type === "genError") {
         const p = pending.get(m.id);
         if (!p) return;
+        clearTimeout(p.timer);
+        p.signal?.removeEventListener("abort", p.abort);
         pending.delete(m.id);
-        if (m.type === "audio") p.resolve({ pcm: m.pcm, sr: m.sr, ms: m.ms });
-        else p.reject(new Error(m.error));
+        if (currentJob === p) currentJob = null;
+        generationMs = Number.isFinite(m.ms) ? m.ms : null;
+        if (!p.cancelled) {
+          if (m.type === "audio") p.resolve({ pcm: m.pcm, sr: m.sr, ms: m.ms });
+          else p.reject(new Error(m.error));
+        }
+        pump();
+        emit();
       }
     };
     current.onerror = (e) => {
       if (worker !== current) return;
       const error = new Error(e.message || "voice worker failed");
-      reset(error);
-      state = "error";
-      lastError = error.message;
-      emit();
+      failWorker(error);
     };
     current.postMessage({ type: "init", device, dtype, where });
   });
@@ -170,6 +264,7 @@ export function load() {
     // the CPU only. The main path is the native engine behind /api/tts (see server.py).
     const r = await start("wasm", "q8");
     if (mine !== revision) throw new Error("voice configuration changed");
+    initMs = Number.isFinite(r.ms) ? r.ms : null;
     engine = "wasm/q8";
     state = "ready";
     emit();
@@ -186,30 +281,32 @@ export function load() {
   return readyPromise;
 }
 
-export async function synthesize(text, { voice = "af_heart", speed = 1 } = {}) {
+export async function synthesize(text, { voice = "af_heart", speed = 1, signal } = {}) {
+  if (signal?.aborted) throw cancelled();
   const key = `${voice}|${speed}|${text}`;
   if (cache.has(key)) { const hit = cache.get(key); cache.delete(key); cache.set(key, hit); return hit; }
-  if (inFlight.has(key)) return inFlight.get(key);
+  // Signal callers own their subscription; aborting one never cancels another
+  // caller for the same text. All callers still reuse completed audio.
+  if (!signal && inFlight.has(key)) return inFlight.get(key);
   const mine = revision;
   const promise = (async () => {
-    await load();
+    await waitForLoad(signal);
+    if (signal?.aborted) throw cancelled();
     if (mine !== revision) throw new Error("voice configuration changed");
-    const id = ++seq;
-    const out = await new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      worker.postMessage({ type: "gen", id, text, voice, speed });
-    });
+    const out = await generate(text, voice, speed, signal);
+    if (signal?.aborted) throw cancelled();
     if (mine !== revision) throw new Error("voice configuration changed");
     remember(key, out);
     return out;
   })().finally(() => { if (inFlight.get(key) === promise) inFlight.delete(key); });
-  inFlight.set(key, promise);
+  if (!signal) inFlight.set(key, promise);
   return promise;
 }
 
 // Testing hook: load one specific engine.
 export async function loadWith(device, dtype) {
   const r = await start(device, dtype);
+  initMs = Number.isFinite(r.ms) ? r.ms : null;
   engine = `${device}/${dtype}`;
   state = "ready";
   readyPromise = Promise.resolve(r.ms);

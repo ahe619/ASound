@@ -3,7 +3,7 @@ import { prefs, savePrefs } from "./state.js";
 import { $, h, fill, icon, toast } from "./util.js";
 import { t, setLanguage, UI_LANGS } from "./i18n.js";
 import { HELP_LANGS } from "./langs.js";
-import { speak, speakBtn, unlockAudio, speechStatus, onSpeechStatus, startNatural, voiceCapabilities, stopSpeaking } from "./speech.js";
+import { speak, speakBtn, voicePreviewBtn, unlockAudio, speechStatus, onSpeechStatus, startNatural, voiceCapabilities, stopSpeaking } from "./speech.js";
 import { aiStatus } from "./ai.js";
 import { voicePicker } from "./widgets.js";
 import { activePacks, packById, packStatus, variant, onPacks } from "./packs.js";
@@ -140,7 +140,8 @@ function paintVoiceOptions() {
   if (cap.canNatural) options.push(["natural", t("settings.voiceStyle.natural")]);
   const selected = options.some(([id]) => id === prefs.voiceEngine) ? prefs.voiceEngine : "auto";
   const useSystem = selected === "system" || (!cap.browser && !cap.native && !cap.canNatural);
-  const sample = speakBtn("Hello! Let's practice English together.", t("voice.preview"), t("voice.preview"));
+  const sample = selected === "system" || selected === "natural" ? speakBtn("Hello! Let's practice English together.", t("voice.preview"), t("voice.preview"))
+    : voicePreviewBtn(null, t("voice.preview"));
   sample.disabled = !cap.effective;
   fill(el,
     h("span", { class: "field-label" }, t("settings.voiceStyle")),
@@ -189,7 +190,9 @@ function paintNatural() {
   if (!el) return;
   const st = speechStatus().natural;
   const cap = voiceCapabilities();
-  el.textContent = prefs.voiceEngine === "natural" && cap.canNatural ? t(`natural.${st}`)
+  const phase = speechStatus().phase;
+  el.textContent = ["loading", "generating"].includes(phase) ? t(`speech.${phase}`)
+    : prefs.voiceEngine === "natural" && cap.canNatural ? t(`natural.${st}`)
     : t("settings.voiceStyle.note");
 }
 
