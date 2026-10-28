@@ -8,6 +8,18 @@ import { VOICES, recommendVoices, voiceById, voicePreviewBtn } from "./speech.js
 import { micButton } from "./mic.js";
 import { medianF0 } from "./pitch.js";
 
+// Keep optional sections where the learner left them during in-page repaints.
+const openSections = new Map();
+export function disclosure(id, title, content, { note = "", open = false } = {}) {
+  const details = h("details", { id, class: "ui-disclosure" },
+    h("summary", null, h("span", { class: "ui-disclosure-title" }, title),
+      note ? h("span", { class: "ui-disclosure-note" }, note) : null),
+    h("div", { class: "ui-disclosure-body" }, content));
+  details.open = openSections.has(id) ? openSections.get(id) : open;
+  details.addEventListener("toggle", () => { if (details.isConnected) openSections.set(id, details.open); });
+  return details;
+}
+
 export function fmtDate(ts) {
   try {
     return new Date(ts).toLocaleString(document.documentElement.lang || "en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });

@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const app = path.resolve(__dirname, '../app');
 const speech = `
 export const VOICES=[]; export const recommendVoices=()=>[]; export const voiceById=()=>({});
+export const voicePreviewBtn=()=>document.createElement('button');
 export const speak=()=>{}; export const isSpeaking=()=>false; export const unlockAudio=()=>{};
 export const stopSpeaking=()=>{window.stops++}; export const paintSpeak=()=>{};
 let ctx; export const audioContext=()=>ctx ||= new AudioContext();
@@ -42,6 +43,7 @@ paint('talk');show(); window.harness={setLanguage,setTab,paint,t};
   if(rel==='') return route.fulfill({contentType:'text/html',body:harness});
   if(rel==='js/speech.js') return route.fulfill({contentType:'text/javascript',body:speech});
   if(rel==='js/ai.js') return route.fulfill({contentType:'text/javascript',body:ai});
+  if(rel==='js/engines.js') return route.fulfill({contentType:'text/javascript',body:'export const enginesApplied=Promise.resolve();'});
   if(rel==='js/packs.js') return route.fulfill({contentType:'text/javascript',body:'export const activePacks=()=>({llm:"llm-cpu",asr:"asr-tiny"});'});
   if(rel==='js/feat-retell.js' && holdRetell) await holdRetell;
   try { const body=await fs.readFile(path.join(app,rel)); await route.fulfill({body,contentType:rel.endsWith('.js')?'text/javascript':rel.endsWith('.json')?'application/json':rel.endsWith('.css')?'text/css':'application/octet-stream'}); }

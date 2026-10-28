@@ -5,7 +5,8 @@ import { t } from "./i18n.js";
 import { profile, placements, checks } from "./store.js";
 import { startPlacement, startProfile, renderPlacementResult, levelBadge, profileFacts } from "./talk.js";
 import { setTalkView } from "./nav.js";
-import { confirmInline, fmtDate, levelName, voiceRecommendCard } from "./widgets.js";
+import { confirmInline, fmtDate, levelName, voiceRecommendCard, disclosure } from "./widgets.js";
+import { cancelMicButton } from "./mic.js";
 
 let placeMode = "words"; // words | topic
 
@@ -13,6 +14,14 @@ export function renderMe() {
   const last = placements.all()[0];
   const p = profile.get();
   const lastCheck = checks.all()[0];
+  const voiceSection = disclosure("me-voice", t("ui.voiceMatch"), voiceRecommendCard(), { note: t("ui.optional") });
+  voiceSection.querySelector("summary").addEventListener("click", () => {
+    // Stop immediately on pointer/keyboard activation; native toggle is queued.
+    if (voiceSection.open) cancelMicButton(voiceSection.querySelector(".mic-btn"));
+  });
+  voiceSection.addEventListener("toggle", () => {
+    if (!voiceSection.open) cancelMicButton(voiceSection.querySelector(".mic-btn"));
+  });
 
   const profileCard = h("div", { class: "card" },
     h("h2", { class: "sec" }, t("me.profileTitle")),
@@ -24,15 +33,15 @@ export function renderMe() {
     h("p", { class: "hint-line" }, t("me.profileWhy")));
 
   fill($("#me"),
-    h("section", { class: "stack-xs" }, h("h1", { class: "title" }, t("me.title")), h("p", { class: "lede" }, t("me.lede"))),
+    h("section", { class: "page-intro" }, h("h1", { class: "title" }, t("me.title")), h("p", { class: "lede" }, t("ui.meIntro"))),
     h("div", { class: "card" },
       h("h2", { class: "sec" }, t("me.levelTitle")),
       levelBadge(prefs.level),
       h("p", { class: "lede" }, t(`level.${prefs.level}.desc`)),
       last ? h("button", { type: "button", class: "btn quiet", onclick: () => { renderPlacementResult(last); setTalkView("summary"); } }, t("me.lastPlacement", { date: fmtDate(last.at), level: levelName(last.level) })) : null),
-    placementCard(!!last),
-    profileCard,
-    voiceRecommendCard(),
+    disclosure("me-placement", t("me.placeTitle"), placementCard(!!last), { note: t("ui.optional") }),
+    disclosure("me-profile", t("me.profileTitle"), profileCard, { note: p ? p.field || "" : t("ui.optional") }),
+    voiceSection,
     lastCheck ? h("p", { class: "note-card" }, t("me.lastCheck", { date: fmtDate(lastCheck.at), score: lastCheck.score })) : null);
 }
 

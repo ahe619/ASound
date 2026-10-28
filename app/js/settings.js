@@ -5,7 +5,7 @@ import { t, setLanguage, UI_LANGS } from "./i18n.js";
 import { HELP_LANGS } from "./langs.js";
 import { speak, speakBtn, voicePreviewBtn, unlockAudio, speechStatus, onSpeechStatus, startNatural, voiceCapabilities, stopSpeaking } from "./speech.js";
 import { aiStatus } from "./ai.js";
-import { voicePicker } from "./widgets.js";
+import { voicePicker, disclosure } from "./widgets.js";
 import { activePacks, packById, packStatus, variant, onPacks } from "./packs.js";
 import { showModels, voiceDownloadCard } from "./models.js";
 import { getLayoutMode, setLayoutMode, layoutInfo, onLayoutChange } from "./device.js";
@@ -82,10 +82,14 @@ function render() {
   fill($("#settings-panel"),
     h("div", { class: "sheet-head" }, h("h2", { id: "settings-title" }, t("settings.title")),
       h("button", { type: "button", class: "icon-btn", id: "settings-close", "aria-label": t("settings.close"), onclick: closeSettings }, icon("close"))),
-    h("div", { class: "stack-xs" },
-      h("label", { class: "field-label", for: "layout-mode" }, t("settings.layout")),
-      select("layout-mode", ["auto", "phone", "tablet", "desktop"].map(id => [id, t(`settings.layout.${id}`)]), getLayoutMode(), setLayoutMode),
-      h("p", { class: "hint-line", id: "layout-status" })),
+    h("p", { class: "hint-line settings-intro" }, t("ui.settingsIntro")),
+    disclosure("settings-voice", t("ui.voiceSettings"), [
+      h("section", { class: "stack-sm", id: "voice-options" }),
+      h("div", { class: "stack-xs" },
+        h("label", { class: "field-label", for: "rate" }, t("settings.rate"), " ", rateOut), rate),
+      h("label", { class: "check" }, autoplay, t("settings.autoplay"))
+    ], { note: t("ui.voiceSettingsNote") }),
+    disclosure("settings-learning", t("ui.learningSettings"), [
     h("div", { class: "stack-xs" },
       h("label", { class: "field-label", for: "ui-lang" }, t("settings.uiLang")),
       select("ui-lang", UI_LANGS, prefs.uiLang, async (id) => {
@@ -93,27 +97,36 @@ function render() {
         savePrefs();
         await setLanguage(id);
         onLanguageChange && onLanguageChange();
+        const scrollTop = $("#settings-panel").scrollTop;
         render();
+        $("#settings-panel").scrollTop = scrollTop;
+        $("#ui-lang").focus({ preventScroll: true });
       })),
     h("div", { class: "stack-xs" },
       h("label", { class: "field-label", for: "help-lang" }, t("settings.helpLang")),
       select("help-lang", HELP_LANGS.map((l) => [l.id, l.label]), prefs.helpLang, (id) => { prefs.helpLang = id; savePrefs(); }),
       h("p", { class: "hint-line" }, t("settings.helpLangNote"))),
-    h("section", { class: "stack-sm", id: "voice-options" }),
-    h("div", { class: "stack-xs" },
-      h("label", { class: "field-label", for: "rate" }, t("settings.rate"), " ", rateOut),
-      rate),
-    h("label", { class: "check" }, autoplay, t("settings.autoplay")),
     h("div", { class: "stack-xs" },
       h("span", { class: "field-label" }, t("settings.strict")),
-      seg([["gentle", t("settings.strict.gentle")], ["normal", t("settings.strict.normal")], ["strict", t("settings.strict.strict")]], prefs.strictness, (id) => { prefs.strictness = id; savePrefs(); })),
-    h("div", { class: "stack-xs" },
-      h("span", { class: "field-label" }, t("settings.engines")),
+      seg([["gentle", t("settings.strict.gentle")], ["normal", t("settings.strict.normal")], ["strict", t("settings.strict.strict")]], prefs.strictness, (id) => { prefs.strictness = id; savePrefs(); }))
+    ], { note: t("ui.learningSettingsNote") }),
+    disclosure("settings-appearance", t("ui.appearanceSettings"), [
+      h("div", { class: "stack-xs" }, h("span", { class: "field-label" }, t("ui.theme")),
+        seg(["system", "light", "dark"].map(id => [id, t(`ui.theme.${id}`)]), window.ASoundTheme?.getMode() || "system", id => window.ASoundTheme?.setMode(id))),
+      h("div", { class: "stack-xs" },
+        h("label", { class: "field-label", for: "layout-mode" }, t("settings.layout")),
+        select("layout-mode", ["auto", "phone", "tablet", "desktop"].map(id => [id, t(`settings.layout.${id}`)]), getLayoutMode(), setLayoutMode),
+        h("p", { class: "hint-line", id: "layout-status" }))
+    ], { note: t("ui.appearanceSettingsNote") }),
+    h("button", { type: "button", class: "settings-link", onclick: () => showModels() },
+      icon("box"), h("span", null, t("settings.models")), icon("download")),
+    disclosure("settings-app", t("updates.title"), [
+      h("section", { class: "stack-xs", id: "app-updates", "aria-live": "polite" }),
+      disclosure("settings-status", t("settings.engines"), [
       h("ul", { class: "engine-list", id: "engine-list" }),
-      h("p", { class: "hint-line" }, t("settings.offline")),
-      h("div", { class: "row" }, h("button", { type: "button", class: "btn", onclick: () => showModels() }, icon("box"), t("settings.models")))),
-    h("section", { class: "stack-xs", id: "app-updates", "aria-live": "polite" }),
-    h("p", { class: "hint-line" }, t("settings.licenses")));
+      h("p", { class: "hint-line" }, t("settings.offline"))]),
+      h("p", { class: "hint-line" }, t("settings.licenses"))
+    ], { note: updateStatus().version || "ASound" }));
   paintEngines();
   paintLayout();
   paintUpdates();
@@ -152,18 +165,20 @@ function paintVoiceOptions() {
       paintVoiceOptions(); paintNatural();
     }),
     h("p", { class: "hint-line", id: "natural-status" }),
-    voiceDownloadCard(),
-    useSystem ? h("p", { class: "hint-line" }, t(cap.system ? "settings.systemVoiceNote" : selected === "system" ? "settings.systemVoiceUnavailable" : "settings.noVoice")) :
-      h("details", null,
-        h("summary", { class: "field-label" }, t("settings.voice")),
-        voicePicker(), h("p", { class: "hint-line" }, t("settings.voiceNote"))),
-    sample);
+    sample,
+    disclosure("settings-voice-library", t("ui.voiceLibrary"), [
+      useSystem ? h("p", { class: "hint-line" }, t(cap.system ? "settings.systemVoiceNote" : selected === "system" ? "settings.systemVoiceUnavailable" : "settings.noVoice")) :
+        h("div", { class: "stack-xs" }, voicePicker(), h("p", { class: "hint-line" }, t("settings.voiceNote"))),
+      voiceDownloadCard()
+    ]));
 }
 
 function paintUpdates() {
   const section = $("#app-updates");
   if (!section) return;
   const status = updateStatus();
+  const summary = $("#settings-app > summary .ui-disclosure-note");
+  if (summary) summary.textContent = status.nextVersion ? t("updates.available") : status.version || "ASound";
   const busy = ["checking", "downloading", "applying"].includes(status.state);
   const available = !!status.nextVersion && ["available", "blocked", "error"].includes(status.state);
   const disabledText = status.reason === "development" ? t("updates.development")
