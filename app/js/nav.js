@@ -2,7 +2,7 @@
 import { state } from "./state.js";
 import { $ } from "./util.js";
 
-export const TABS = ["talk", "accent", "vocab", "models", "me"];
+export const TABS = ["talk", "accent", "vocab", "voices", "models", "me"];
 const renderers = {};
 const cleanups = {};
 const details = {};

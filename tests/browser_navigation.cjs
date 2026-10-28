@@ -87,8 +87,8 @@ const server = http.createServer((req, res) => {
 
     await page.click('#settings-open'); await visible('#settings');
     const settingsId = (await nav()).id;
-    await page.locator('#settings-voice > summary').click();
-    await page.locator('#autoplay').scrollIntoViewIfNeeded();
+    await page.locator('#settings-appearance > summary').click();
+    await page.locator('#layout-mode').scrollIntoViewIfNeeded();
     const panelScroll = await page.locator('#settings-panel').evaluate(el => el.scrollTop);
     await back(); await page.locator('#ws-spelling').waitFor();
     await forward(); await visible('#settings');

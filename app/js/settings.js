@@ -1,5 +1,5 @@
-// Settings sheet: interface and help language, voice, speed, corrections, and the state of the local engines.
-import { prefs, savePrefs } from "./state.js";
+// General settings sheet and the dedicated voice-selection page.
+import { prefs, savePrefs, state } from "./state.js";
 import { $, h, fill, icon, toast } from "./util.js";
 import { t, setLanguage, UI_LANGS } from "./i18n.js";
 import { HELP_LANGS } from "./langs.js";
@@ -32,8 +32,12 @@ export function initSettings({ languageChanged }) {
   $("#settings-open").addEventListener("click", openSettings);
   $("#settings").addEventListener("click", (e) => { if (e.target === e.currentTarget) closeSettings(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#settings").hidden) closeSettings(); });
-  onSpeechStatus(() => { if (!$("#settings").hidden) paintEngines(); });
-  onPacks(() => { if (!$("#settings").hidden) paintEngines(); });
+  const paintStatus = () => {
+    if (state.tab === "voices") { paintVoiceOptions(); paintNatural(); }
+    if (!$("#settings").hidden) paintEngines();
+  };
+  onSpeechStatus(paintStatus);
+  onPacks(paintStatus);
   onLayoutChange(paintLayout);
   if (window.ASoundMic) window.ASoundMic.onStatus(() => { if (!$("#settings").hidden) paintEngines(); });
   onUpdateStatus((status) => {
@@ -68,7 +72,7 @@ function seg(options, current, onPick) {
   return box;
 }
 
-function render() {
+export function renderVoices() {
   voiceSignature = "";
   const rateOut = h("output", { for: "rate" }, `${prefs.rate.toFixed(2)}\u00d7`);
   const rate = h("input", { type: "range", id: "rate", min: "0.6", max: "1.3", step: "0.05" });
@@ -79,16 +83,22 @@ function render() {
   autoplay.checked = !!prefs.autoplay;
   autoplay.addEventListener("change", () => { prefs.autoplay = autoplay.checked; savePrefs(); });
 
+  fill($("#voices"),
+    h("section", { class: "page-intro" }, h("h1", { class: "title" }, t("tab.voices")), h("p", { class: "lede" }, t("ui.voicesIntro"))),
+    disclosure("voice-playback", t("ui.voicePlayback"), [
+      h("div", { class: "stack-xs" }, h("label", { class: "field-label", for: "rate" }, t("settings.rate"), " ", rateOut), rate),
+      h("label", { class: "check" }, autoplay, t("settings.autoplay"))
+    ]),
+    h("section", { class: "card", id: "voice-options" }));
+  paintVoiceOptions();
+  paintNatural();
+}
+
+function render() {
   fill($("#settings-panel"),
     h("div", { class: "sheet-head" }, h("h2", { id: "settings-title" }, t("settings.title")),
       h("button", { type: "button", class: "icon-btn", id: "settings-close", "aria-label": t("settings.close"), onclick: closeSettings }, icon("close"))),
     h("p", { class: "hint-line settings-intro" }, t("ui.settingsIntro")),
-    disclosure("settings-voice", t("ui.voiceSettings"), [
-      h("section", { class: "stack-sm", id: "voice-options" }),
-      h("div", { class: "stack-xs" },
-        h("label", { class: "field-label", for: "rate" }, t("settings.rate"), " ", rateOut), rate),
-      h("label", { class: "check" }, autoplay, t("settings.autoplay"))
-    ], { note: t("ui.voiceSettingsNote") }),
     disclosure("settings-learning", t("ui.learningSettings"), [
     h("div", { class: "stack-xs" },
       h("label", { class: "field-label", for: "ui-lang" }, t("settings.uiLang")),
@@ -138,6 +148,7 @@ function paintLayout() {
 }
 
 function paintVoiceOptions() {
+  if (state.tab !== "voices") return;
   const el = $("#voice-options");
   if (!el) return;
   const cap = voiceCapabilities();
@@ -153,7 +164,7 @@ function paintVoiceOptions() {
   const useSystem = selected === "system" || (!cap.browser && !cap.native && !cap.canNatural);
   const sample = selected === "system" || selected === "natural" ? speakBtn("Hello! Let's practice English together.", t("voice.preview"), t("voice.preview"))
     : voicePreviewBtn(null, t("voice.preview"));
-  sample.disabled = !cap.effective;
+  sample.disabled = (selected === "system" || selected === "natural") && !cap.effective;
   fill(el,
     h("span", { class: "field-label" }, t("settings.voiceStyle")),
     seg(options, selected, id => {
@@ -164,11 +175,9 @@ function paintVoiceOptions() {
     }),
     h("p", { class: "hint-line", id: "natural-status" }),
     sample,
-    disclosure("settings-voice-library", t("ui.voiceLibrary"), [
-      useSystem ? h("p", { class: "hint-line" }, t(cap.system ? "settings.systemVoiceNote" : selected === "system" ? "settings.systemVoiceUnavailable" : "settings.noVoice")) :
-        h("div", { class: "stack-xs" }, voicePicker(), h("p", { class: "hint-line" }, t("settings.voiceNote"))),
-      voiceDownloadCard()
-    ]));
+    useSystem || cap.effective === "system" ? h("p", { class: "hint-line" }, t(cap.effective ? "ui.voicesSystemNote" : "ui.voicesNeedsPack")) : null,
+    h("div", { class: "stack-xs" }, voicePicker(), h("p", { class: "hint-line" }, t("settings.voiceNote"))),
+    disclosure("voice-download", t("ui.voiceDownloads"), voiceDownloadCard()));
 }
 
 function paintUpdates() {
@@ -199,6 +208,7 @@ function paintUpdates() {
 }
 
 function paintNatural() {
+  if (state.tab !== "voices") return;
   const el = $("#natural-status");
   if (!el) return;
   const st = speechStatus().natural;
@@ -210,8 +220,6 @@ function paintNatural() {
 }
 
 function paintEngines() {
-  paintVoiceOptions();
-  paintNatural();
   const list = $("#engine-list");
   if (!list) return;
   const ai = aiStatus();

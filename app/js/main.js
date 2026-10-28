@@ -7,10 +7,10 @@ import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent, cleanupAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
 import { renderMe } from "./me.js";
-import { initSettings } from "./settings.js";
+import { initSettings, renderVoices } from "./settings.js";
 import { onStoreChange } from "./store.js";
 import { repaintSaveButtons } from "./widgets.js";
-import { warmUp } from "./speech.js";
+import { warmUp, stopSpeaking } from "./speech.js";
 import { initSpeechFeedback } from "./speech-ui.js";
 import { ready, packMode } from "./packs.js";
 import { initUpdates } from "./updates.js";
@@ -31,6 +31,7 @@ function renderAll() {
   if (state.tab === "vocab") renderVocab();
   if (state.tab === "me") renderMe();
   if (state.tab === "models") renderModels();
+  if (state.tab === "voices") renderVoices();
   paintVocabCount();
 }
 
@@ -58,6 +59,8 @@ async function boot() {
     if (event.persisted && state.tab === "vocab") renderVocab();
   });
   registerTab("me", renderMe);
+  registerTab("voices", renderVoices);
+  registerTabCleanup("voices", stopSpeaking);
   registerTabCleanup("me", () => window.ASoundMic?.cancel?.()); // "Find a voice like yours" records on Me
   for (const tab of TABS) $("#tab-" + tab).addEventListener("click", () => setTab(tab));
 

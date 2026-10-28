@@ -72,6 +72,20 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.evaluate(() => document.activeElement.id), drillId);
     await page.locator('#accent-topics > summary').click();
 
+    await page.click('#tab-voices');
+    await page.locator('#voices .voice-opt').nth(1).click();
+    const selectedVoice = await page.evaluate(async () => (await import('./js/state.js')).prefs.voice);
+    await open('voice-playback');
+    await page.locator('#autoplay').check();
+    await page.reload();
+    await page.locator('#voices .voice-opt').first().waitFor();
+    assert.equal(await page.locator('#tab-voices').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.evaluate(async () => (await import('./js/state.js')).prefs.voice), selectedVoice);
+    await open('voice-playback');
+    assert.equal(await page.locator('#autoplay').isChecked(), true);
+    await page.locator('#voice-playback > summary').click();
+    await page.click('#tab-accent');
+
     await page.click('#settings-open');
     await inScreen(page.locator('#settings-app > summary'));
     await open('settings-learning');
@@ -85,6 +99,7 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.evaluate(() => ASoundTheme.getMode()), 'dark');
     await page.locator('#settings-appearance').getByRole('button', { name: 'Light', exact: true }).click();
     assert.equal(await page.locator('#settings .settings-link').count(), 0);
+    assert.equal(await page.locator('#settings #voice-options, #settings #autoplay').count(), 0);
     await page.click('#settings-close');
     await page.click('#tab-models');
     await page.locator('#view-models:not([hidden])').waitFor();
@@ -109,7 +124,7 @@ const server = http.createServer((req, res) => {
       await page.setViewportSize({ width, height: width < 600 ? 844 : 900 });
       for (const mode of ['light', 'dark']) {
         await page.evaluate(mode => ASoundTheme.setMode(mode), mode);
-        for (const tab of ['talk', 'accent', 'vocab', 'models', 'me']) {
+        for (const tab of ['talk', 'accent', 'vocab', 'voices', 'models', 'me']) {
           await page.click('#tab-' + tab);
           assert.equal(await page.evaluate(() => {
             const view = document.querySelector('.view:not([hidden])');

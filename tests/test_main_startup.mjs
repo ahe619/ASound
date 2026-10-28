@@ -44,7 +44,7 @@ async function boot({ hash = "", entry = null, recent = false, practicing = () =
   context.resumeIfRecent = () => { calls.resumed++; if (recent) context.resumeSession(); };
   for (const name of ["initLayout", "initTalk", "initAccent", "initSettings", "onStoreChange", "renderTalkHome",
     "renderAccent", "cleanupAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels", "paintVocabCount", "repaintSaveButtons",
-    "initUpdates", "initSpeechFeedback", "warmUp", "showModels", "applyI18n"])
+    "initUpdates", "initSpeechFeedback", "warmUp", "stopSpeaking", "renderVoices", "showModels", "applyI18n"])
     context[name] = noop;
   vm.runInContext(navSource, context);
   vm.runInContext(mainSource, context);
@@ -96,4 +96,13 @@ test("the Models link stays selected when model checks finish despite a recent c
   assert.equal(app.state.tab, "models");
   assert.equal(app.calls.resumed, 0);
   assert.equal(app.el("#view-models").hidden, false);
+});
+
+test("the Voices link is not replaced by a recent conversation after startup", async () => {
+  const app = await boot({ hash: "#voices", recent: true });
+  assert.equal(app.state.tab, "voices");
+  await app.finish();
+  assert.equal(app.state.tab, "voices");
+  assert.equal(app.calls.resumed, 0);
+  assert.equal(app.el("#view-voices").hidden, false);
 });
