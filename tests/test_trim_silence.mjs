@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 // trimSilence lives inside the voice-input.js script closure; evaluate just that function.
-const source = readFileSync(new URL("../app/js/voice-input.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../app/js/voice-input.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const trimSilence = new Function(`const RATE = 16000;
 const rmsOf = (f) => { let s = 0; for (let i = 0; i < f.length; i++) s += f[i] * f[i]; return Math.sqrt(s / f.length); };
 ${source.match(/function trimSilence[\s\S]*?\n  }\n/)[0]}

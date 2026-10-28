@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 // salvageJSON lives inside the local-ai.js script closure; evaluate just that function.
-const source = readFileSync(new URL("../app/js/local-ai.js", import.meta.url), "utf8");
+const source = readFileSync(new URL("../app/js/local-ai.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const salvageJSON = new Function(`${source.match(/function salvageJSON[\s\S]*?\n  }\n/)[0]}\nreturn salvageJSON;`)();
 
 test("a reply cut off mid-list keeps every complete field", () => {
