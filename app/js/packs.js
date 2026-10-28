@@ -12,6 +12,7 @@ export const CANON = "https://models.asound.invalid/"; // cache keys look the sa
 const FORCE_WEB = new URLSearchParams(location.search).has("web");
 
 let catalog = null;
+let downloadBases = [];        // optional operator-configured mirrors, never user preferences
 let mode = "web";
 let gpu = { webgpu: false, f16: false, vendor: "", mobile: false };
 let status = {};               // pack id -> {state, done, total, rate?, error?}
@@ -42,6 +43,7 @@ export async function initPacks({ readOnly = false } = {}) {
     savePrefs();
   }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
+  downloadBases = mode === "web" ? validateDownloadBases(catalog.downloadBases) : [];
   if (mode === "web") {
     voiceRoot(); // Validate the optional same-origin voice source before using it.
     await checkRuntimeRelease();
@@ -320,6 +322,37 @@ function voiceRoot() {
   }
   return new URL(`${source.models}/`, location.href).href;
 }
+
+function validateDownloadBases(values) {
+  if (values === undefined) return [];
+  if (!Array.isArray(values) || values.length > 3) throw new Error("Invalid download mirrors");
+  return [...new Set(values.map(value => {
+    if (typeof value !== "string" || !/^https?:\/\//i.test(value) || /[\s\\?#]/.test(value)) throw new Error("Invalid download mirror URL");
+    let decoded = value;
+    try {
+      for (let i = 0; i < 8; i++) {
+        const next = decodeURIComponent(decoded);
+        if (next === decoded) break;
+        decoded = next;
+        if (i === 7) throw new Error();
+      }
+      const url = new URL(value);
+      if (url.username || url.password || url.port === "0"
+        || !/^[A-Za-z0-9.:[\]-]+$/.test(url.hostname)
+        || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+        || /[\s\\?#\x00-\x1f]/.test(decoded) || decoded.split("/").some(part => part === "." || part === "..")) throw new Error();
+    } catch { throw new Error("Invalid download mirror URL"); }
+    return value.replace(/\/+$/, "");
+  }))];
+}
+
+function hostedVoiceDownloadUrls(file) {
+  // The cache identity and inference base stay on the original versioned source.
+  // Mirrors only change where a verified, explicitly requested download comes from.
+  if (downloadBases.length && !/^[a-f0-9]{64}$/i.test(file.sha256 || "")) throw new Error("Mirrored voice downloads require a SHA-256 digest");
+  const relative = `${catalog.voiceSource.models}/${file.repo}/resolve/main/${file.path}`;
+  return [...new Set([...downloadBases.map(base => `${base}/${relative}`), fileUrl(file, null)])];
+}
 function hostedVoiceFile(f) {
   return mode === "web" && voiceRoot() && f.repo === catalog.voiceSource.repository
     && packById("voice")?.files.some((item) => item.path === f.path && item.repo === f.repo);
@@ -525,7 +558,7 @@ async function pumpWeb() {
         ctl.signal.throwIfAborted();
         if (await cache.match(canonKey(f))) { done += f.size; set(done); continue; }
         await downloadModelFile({ cache, key: canonKey(f), file: f,
-          urls: source === null ? [fileUrl(f, null)] : [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
+          urls: source === null ? hostedVoiceDownloadUrls(f) : [source, ...sourceList().filter((s) => s !== source)].map((s) => fileUrl(f, s)),
           signal: ctl.signal, onBytes: (n) => set(done + n) });
         done += f.size;
         set(done);

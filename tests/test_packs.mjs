@@ -178,6 +178,56 @@ test("a voice source revision changes cache identity and does not treat old unve
   assert.equal((await desktop.api.engineConfig("voice")).base, "https://app.test/ASound/models/");
 });
 
+test("configured voice mirrors precede the original website without changing inference or other packs", async () => {
+  const data = hostedVoiceCatalog();
+  data.downloadBases = ["https://download.test/asound/", "https://backup.test", "https://download.test/asound"];
+  const voice = data.packs.find(p => p.id === "voice");
+  voice.files[0].sha256 = "a".repeat(64);
+  const env = await fixture({ data, mobile: true });
+  const cfg = await env.api.engineConfig("voice");
+  assert.equal(cfg.base, "https://app.test/ASound/voice-models/abcdef0123456789/");
+  const canonical = env.api.canonKey(voice.files[0]);
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "mirrored voice should install");
+  const path = "voice-models/abcdef0123456789/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx";
+  assert.deepEqual(Array.from(env.downloads[0].urls), ["https://download.test/asound/" + path, "https://backup.test/" + path, "https://app.test/ASound/" + path]);
+  assert.equal(env.downloads[0].key, canonical);
+  assert.equal(env.downloads[0].file.sha256, "a".repeat(64));
+  assert.equal(env.saved, 0);
+  assert.equal(env.requests.some(r => r.url.startsWith("https://hf.test") || r.url.startsWith("https://mirror.test")), false);
+  assert.equal(env.api.fileUrl(data.packs.find(p => p.id === "asr-tiny").files[0], "hf"), "https://hf.test/test/asr-tiny/resolve/main/config.json");
+
+  // A later deployment may add, replace or remove a mirror. The installed bytes remain usable.
+  const keys = [...env.cache.entries.keys()];
+  data.downloadBases = ["https://new-download.test/files"];
+  await env.api.initPacks({ readOnly: true });
+  assert.equal(env.api.packStatus("voice").state, "installed");
+  await env.api.install("voice");
+  await flush();
+  assert.equal(env.downloads.length, 1, "a new mirror must not invalidate downloaded weights");
+  assert.deepEqual([...env.cache.entries.keys()], keys);
+});
+
+test("invalid operator mirror URLs are rejected and desktop configuration is unaffected", async () => {
+  for (const values of [null, "https://download.test", ["http://download.test"], ["https://user:secret@download.test"],
+    ["https://download.test/?token=secret"], ["https://download.test/#part"], ["https://download.test/a/../b"],
+    ["https://download.test/a/%252e%252e/b"], ["//download.test/a"], ["https://download.test/a%5cb"],
+    ["https://download.test/a%0ab"], ["https://download.test:0"], ["https://download.test", "https://a.test", "https://b.test", "https://c.test"]]) {
+    await assert.rejects(fixture({ data: { ...hostedVoiceCatalog(), downloadBases: values } }), /Invalid download mirror/);
+  }
+  const desktop = await fixture({ data: { ...hostedVoiceCatalog(), downloadBases: ["https://download.test/files"] }, desktop: true });
+  assert.equal(desktop.api.packMode(), "desktop");
+  assert.equal((await desktop.api.engineConfig("voice")).base, "https://app.test/ASound/models/");
+});
+
+test("voice mirrors require pinned hashes before requesting any model bytes", async () => {
+  const env = await fixture({ data: { ...hostedVoiceCatalog(), downloadBases: ["https://download.test"] } });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "partial", "unverified mirror download must fail");
+  assert.equal(env.downloads.length, 0);
+  assert.match(env.api.packStatus("voice").error, /SHA-256/);
+});
+
 test("hosted voice source refuses absolute URLs and traversal instead of redirecting model downloads", async () => {
   for (const models of ["https://other.test/models", "//other.test/models", "../voice-models/abcdef0123456789"]) {
     const data = hostedVoiceCatalog();

@@ -34,6 +34,7 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
   const context = {
     URL, Request, Response, AbortController, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
     Uint8Array, crypto: webcrypto, caches: storage,
+    setTimeout: (fn, ms) => setTimeout(fn, env.timeoutFor?.(ms) ?? ms), clearTimeout,
     fetch: async (request) => {
       const relative = String(request.url || request).slice(SCOPE.length);
       env.fetched.push(relative);
@@ -78,6 +79,166 @@ test("a release installs atomically and pins offline resources without auto-acti
   assert.deepEqual(w.fetched, []);
   assert.equal(await w.get("models/large.bin"), undefined);
   assert.equal(await w.get("api/health"), undefined);
+});
+
+const voiceRuntime = "kokoro/ort-cpu/ort-wasm-simd-threaded.wasm";
+function mirrored(files, mirrors = ["https://cdn.test/voice"]) {
+  return assets(files).map(asset => asset.url === "index.html" ? asset : { ...asset, lazy: true,
+    size: Buffer.byteLength(files[asset.url]),
+    mirrors: mirrors.map(base => `${base}/assets/${asset.sha256}/${asset.url}`) });
+}
+
+test("verified mirrors keep same-origin cache keys and strip remote response URLs", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const manifest = mirrored(files), w = worker("one", files, new CacheStorage(), manifest);
+  await w.dispatch("install");
+  const seen = [];
+  w.interceptFetch = request => {
+    seen.push({ url: request.url, mode: request.mode, credentials: request.credentials });
+    const response = new Response("runtime", { headers: { "Content-Type": "application/wasm", "X-Remote": "not copied" } });
+    Object.defineProperty(response, "url", { value: request.url });
+    return response;
+  };
+  const response = await w.get(voiceRuntime);
+  assert.equal(await response.text(), "runtime");
+  assert.equal(response.url, "", "the mirrored URL must not become a module's base URL");
+  assert.equal(response.headers.get("X-Remote"), null);
+  assert.deepEqual(seen, [{ url: manifest[1].mirrors[0], mode: "cors", credentials: "omit" }]);
+  w.interceptFetch = () => { throw new Error("offline"); };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+  assert.ok(w.storage.data.get(prefix + "one").has(SCOPE + voiceRuntime));
+  assert.equal(w.storage.data.get(prefix + "one").has(manifest[1].mirrors[0]), false);
+});
+
+test("bad MIME, opaque responses and hash mismatches fall back through mirrors to the original URL", async () => {
+  const files = { "index.html": "page", "kokoro/neural-tts.js": "export const ok = true;" };
+  const manifest = mirrored(files, ["https://one.test", "https://two.test", "https://three.test"]);
+  const w = worker("one", files, new CacheStorage(), manifest);
+  await w.dispatch("install"); const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url);
+    const response = new Response(seen.length === 3 ? "x".repeat(files["kokoro/neural-tts.js"].length) : files["kokoro/neural-tts.js"], {
+      headers: { "Content-Type": seen.length === 1 ? "text/html" : "application/javascript" } });
+    if (seen.length === 2) Object.defineProperty(response, "type", { value: "opaque" });
+    return response;
+  };
+  const response = await w.get("kokoro/neural-tts.js");
+  assert.equal(await response.text(), files["kokoro/neural-tts.js"]);
+  assert.equal(response.headers.get("Content-Type"), "text/javascript");
+  assert.deepEqual(seen, [...manifest[1].mirrors, SCOPE + "kokoro/neural-tts.js"]);
+});
+
+test("mirror connection and body stalls abort that source and allow the next source", async () => {
+  for (const kind of ["connection", "body", "total"]) {
+    const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+    const manifest = mirrored(files, ["https://stalled.test", "https://good.test"]);
+    const w = worker(kind, files, new CacheStorage(), manifest);
+    await w.dispatch("install");
+    w.timeoutFor = ms => ms === (kind === "connection" ? 10000 : kind === "total" ? 180000 : 20000) ? 15 : 1000;
+    let stalledSignal; const seen = [];
+    w.interceptFetch = request => {
+      seen.push(request.url);
+      if (seen.length > 1) return new Response("runtime", { headers: { "Content-Type": "application/wasm" } });
+      stalledSignal = request.signal;
+      if (kind === "connection") return new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
+      return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+        request.signal.addEventListener("abort", () => controller.error(request.signal.reason), { once: true });
+      } }), { headers: { "Content-Type": "application/wasm" } });
+    };
+    assert.equal(await (await w.get(voiceRuntime)).text(), "runtime", kind);
+    assert.equal(stalledSignal.aborted, true, kind);
+    assert.deepEqual(seen, manifest[1].mirrors, kind);
+  }
+});
+
+test("oversized bodies are cancelled immediately and truncated bodies cannot enter the cache", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const manifest = mirrored(files, ["https://oversized.test", "https://truncated.test"]);
+  const w = worker("one", files, new CacheStorage(), manifest); await w.dispatch("install");
+  let cancelled = false, signal; const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url);
+    if (seen.length === 1) {
+      signal = request.signal;
+      return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(8)); },
+        cancel() { cancelled = true; } }), { headers: { "Content-Type": "application/wasm" } });
+    }
+    return new Response(seen.length === 2 ? "short" : "runtime", { headers: { "Content-Type": "application/wasm" } });
+  };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+  assert.equal(cancelled, true); assert.equal(signal.aborted, true);
+  assert.deepEqual(seen, [...manifest[1].mirrors, SCOPE + voiceRuntime]);
+});
+
+test("the final site is allowed to make steady progress beyond the mirror total deadline", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const w = worker("one", files, new CacheStorage(), mirrored(files)); await w.dispatch("install");
+  w.timeoutFor = ms => ms === 180000 ? 5 : 100;
+  w.interceptFetch = request => {
+    if (!request.url.startsWith(SCOPE)) return new Response("bad", { headers: { "Content-Type": "text/plain" } });
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode("run"));
+      setTimeout(() => { controller.enqueue(new TextEncoder().encode("time")); controller.close(); }, 25);
+    } }), { headers: { "Content-Type": "application/wasm" } });
+  };
+  assert.equal(await (await w.get(voiceRuntime)).text(), "runtime");
+});
+
+test("cancelling a mirrored runtime stops the body and every fallback, preserving client isolation and retry", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const w = worker("one", files, new CacheStorage(), mirrored(files, ["https://one.test", "https://two.test"]));
+  await w.dispatch("install"); let networkSignal; const seen = [];
+  w.interceptFetch = request => {
+    seen.push(request.url); networkSignal = request.signal;
+    return new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array([1]));
+      request.signal.addEventListener("abort", () => controller.error(request.signal.reason), { once: true });
+    } }), { headers: { "Content-Type": "application/wasm" } });
+  };
+  const id = "mirror-runtime-cancel-0001";
+  const get = requestId => w.dispatch("fetch", { clientId: "one", request: new Request(SCOPE + voiceRuntime, { headers: { "X-ASound-Runtime-Request": requestId } }) });
+  const cancel = (requestId, clientId = "one") => w.dispatch("message", { data: { type: "ASOUND_CANCEL_RUNTIME", requestId }, source: { id: clientId, url: SCOPE }, ports: [] });
+  const pending = get(id);
+  while (!networkSignal) await new Promise(resolve => setImmediate(resolve));
+  await cancel(id, "two"); assert.equal(networkSignal.aborted, false);
+  await cancel(id); assert.equal((await pending).status, 503);
+  assert.equal(networkSignal.aborted, true); assert.equal(seen.length, 1);
+  assert.equal(await (await w.storage.open(prefix + "one")).match(SCOPE + voiceRuntime), undefined);
+  const early = "mirror-runtime-early-0002";
+  await cancel(early); assert.equal((await get(early)).status, 503); assert.equal(seen.length, 1);
+  w.interceptFetch = request => { seen.push(request.url); return new Response("runtime", { headers: { "Content-Type": "application/wasm" } }); };
+  assert.equal(await (await get("mirror-runtime-retry-0003")).text(), "runtime");
+  assert.equal(seen.length, 2);
+});
+
+test("a changed previously-used voice asset can be installed from its verified mirror", async () => {
+  const oldFiles = { "index.html": "page", "audio/voices/af_heart.wav": "old audio" };
+  const old = worker("old", oldFiles); await old.dispatch("install");
+  const files = { ...oldFiles, "audio/voices/af_heart.wav": "new audio" };
+  const next = worker("new", files, old.storage, mirrored(files));
+  next.interceptFetch = request => {
+    assert.ok(request.url.startsWith("https://cdn.test/"));
+    return new Response("new audio", { headers: { "Content-Type": "audio/wav" } });
+  };
+  await next.dispatch("install");
+  next.interceptFetch = () => { throw new Error("offline"); };
+  assert.equal(await (await next.get("audio/voices/af_heart.wav")).text(), "new audio");
+});
+
+test("mirrors cannot be attached to arbitrary scripts or escape the pinned HTTPS hash path", async () => {
+  const files = { "index.html": "page", [voiceRuntime]: "runtime" };
+  const good = mirrored(files);
+  for (const change of [
+    asset => ({ ...asset, url: "js/main.js" }),
+    asset => ({ ...asset, lazy: false }),
+    asset => ({ ...asset, size: undefined }),
+    asset => ({ ...asset, size: -1 }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0].replace("https:", "http:")] }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0] + "?replace=true"] }),
+    asset => ({ ...asset, mirrors: [asset.mirrors[0].replace(asset.sha256, "0".repeat(64))] }),
+    asset => ({ ...asset, mirrors: Array.from({ length: 4 }, (_, i) => asset.mirrors[0].replace("cdn.test", `cdn${i}.test`)) }),
+  ]) await assert.rejects(worker("bad", files, new CacheStorage(), [good[0], change(good[1])]).dispatch("install"), /Invalid release manifest/);
 });
 
 test("a bad download cannot destroy the working release or model cache", async () => {

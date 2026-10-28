@@ -102,6 +102,21 @@ class BrowserVoiceHostingTests(unittest.TestCase):
             self.assertIn("optional", bundle.read("soundoa-site/README.md").decode())
             self.assertIn("101 MB", bundle.read("instructions/README.txt").decode())
 
+    def test_mirror_configuration_keeps_voice_identity_and_model_hashes(self):
+        baseline = build(self.app, self.site, "0.3.0", with_web_voice=True)
+        previous = json.loads((self.site / "packs.json").read_text())
+        manifest = (self.site / "voice-models.json").read_bytes()
+        result = prepare(project_root=self.root, with_web_voice=True,
+                         download_bases=["https://downloads.example.com/voice/"])
+        hosted = Path(result["output"]) / "site"
+        published = json.loads((hosted / "packs.json").read_text())
+        self.assertEqual(published["voiceSource"], previous["voiceSource"])
+        self.assertEqual(published["packs"], previous["packs"])
+        self.assertEqual((hosted / "voice-models.json").read_bytes(), manifest)
+        self.assertEqual(published["downloadBases"], ["https://downloads.example.com/voice"])
+        self.assertNotEqual(result["release"], baseline["version"])
+        verify_site(hosted)
+
 
 class VoiceLockTests(unittest.TestCase):
     def test_checked_in_lock_covers_real_mobile_catalog_exactly(self):
