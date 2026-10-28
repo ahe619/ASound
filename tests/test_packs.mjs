@@ -55,7 +55,7 @@ function catalog() {
 
 async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDIA", desktop = false,
   data = catalog(), prefs = {}, flags = {}, cached = [], partial = {}, fetchRemote = null, download = null,
-  release = null, controlled = true, runtimeFiles = [], runtimeFetch = null } = {}) {
+  release = null, controlled = true, runtimeFiles = [], runtimeFetch = null, initOptions } = {}) {
   const cache = new MemoryCache();
   const stored = new Map([["asound.llmCached.v1", JSON.stringify(flags)]]);
   const shell = new MemoryCache();
@@ -127,7 +127,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
   };
   vm.runInNewContext(source, context, { filename: "packs.js" });
   env.api = context.api;
-  await env.api.initPacks();
+  await env.api.initPacks(initOptions);
   return env;
 }
 
@@ -374,7 +374,44 @@ test("a finishing download remains cancellable until its storage status refresh 
 });
 
 const ONNX = ["vendor/transformers/ort-wasm-simd-threaded.jsep.mjs", "vendor/transformers/ort-wasm-simd-threaded.jsep.wasm"];
-const VOICE_RUNTIME = [...ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"];
+const VOICE_ONNX = ["kokoro/ort-cpu/ort-wasm-simd-threaded.mjs", "kokoro/ort-cpu/ort-wasm-simd-threaded.wasm"];
+const VOICE_RUNTIME = [...VOICE_ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"];
+
+test("read-only diagnostics inspect incomplete packs without changing preferences or repairing runtimes", async () => {
+  const env = await fixture({ release: "test-v1", cached: ["voice"], prefs: { source: "removed-source" },
+    initOptions: { readOnly: true } });
+  assert.equal(env.api.packStatus("voice").state, "partial");
+  assert.equal(env.api.packStatus("voice").runtimeMissing, true);
+  assert.equal(env.prefs.source, "removed-source");
+  assert.equal(env.saved, 0);
+  assert.equal(env.idle.length, 0);
+  env.runIdle(); await env.api.refresh(); await flush();
+  assert.deepEqual(env.runtimeRequests, []);
+  assert.equal(env.downloads.length, 0);
+  assert.equal(env.saved, 0);
+
+  const normal = await fixture({ release: "test-v1", cached: ["voice"], prefs: { source: "removed-source" } });
+  assert.equal(normal.prefs.source, "auto");
+  assert.equal(normal.saved, 1);
+  normal.runIdle();
+  await until(() => normal.api.packStatus("voice").state === "installed", "ordinary startup still repairs runtime files");
+  assert.deepEqual(normal.runtimeRequests, VOICE_RUNTIME);
+  assert.equal(normal.downloads.length, 0);
+});
+
+test("an older JSEP voice installation repairs only its new CPU runtime and keeps model cache keys", async () => {
+  const env = await fixture({ release: "test-v2", cached: ["voice"],
+    runtimeFiles: [...ONNX, ...VOICE_RUNTIME.slice(2)] });
+  const keys = [...env.cache.entries.keys()];
+  assert.equal(env.api.packStatus("voice").state, "partial");
+  assert.equal(env.api.packStatus("voice").runtimeMissing, true);
+  env.runIdle();
+  await until(() => env.api.packStatus("voice").state === "installed", "new CPU runtime completes the old installation");
+  assert.deepEqual(env.runtimeRequests, VOICE_ONNX);
+  assert.equal(env.downloads.length, 0, "already installed model bytes are not downloaded again");
+  assert.deepEqual([...env.cache.entries.keys()], keys);
+  assert.equal(env.cache.entries.size, 1);
+});
 
 test("a release pack stays downloading until its required runtime is verified in the offline snapshot", async () => {
   const entered = deferred(), release = deferred();
@@ -487,7 +524,8 @@ test("startup repairs old weight-only packs in the serial queue without blocking
   release.resolve();
   await until(() => env.api.packStatus("voice").state === "installed", "queued repair should complete");
   assert.equal(env.downloads.length, 0);
-  assert.equal(env.runtimeRequests.length, 6, "shared ONNX files are fetched only once");
+  assert.deepEqual(env.runtimeRequests, ["vendor/transformers/transformers.min.js", ...ONNX, ...VOICE_RUNTIME],
+    "ASR retains its runtime while voice repairs the separate WASM-only runtime");
 });
 
 test("an already verified release pack is installed offline with no runtime downloads", async () => {

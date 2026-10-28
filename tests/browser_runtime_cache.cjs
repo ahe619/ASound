@@ -9,8 +9,8 @@ const { chromium } = require('playwright');
 const app = path.resolve(__dirname, '../app');
 const version = 'runtime-offline-test-v1';
 const runtimes = [
-  'vendor/transformers/ort-wasm-simd-threaded.jsep.mjs',
-  'vendor/transformers/ort-wasm-simd-threaded.jsep.wasm',
+  'kokoro/ort-cpu/ort-wasm-simd-threaded.mjs',
+  'kokoro/ort-cpu/ort-wasm-simd-threaded.wasm',
   'kokoro/kokoro.web.js', 'kokoro/neural-tts.js', 'kokoro/lexicon-us.json',
 ];
 const files = new Map([
@@ -135,6 +135,38 @@ const server = http.createServer((req, res) => {
     }, runtimes);
     assert.equal(offline, true);
     passed.push('offline reload recognizes the complete pack and serves every runtime without a network');
+
+    // After an update, an existing model pack can still have only the old JSEP
+    // runtime. Keep its actual CacheStorage weights and shared module entries.
+    await context.setOffline(false);
+    const weightKeys = await page.evaluate(async ({ version, runtimes }) => {
+      const root = new URL('./', location.href).href;
+      const cache = await caches.open(`asound-shell-v2:${encodeURIComponent(root)}:${version}`);
+      for (const file of runtimes.slice(0, 2)) await cache.delete(new URL(file, root));
+      for (const file of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm']) {
+        await cache.put(new URL('vendor/transformers/' + file, root), new Response('previous voice runtime'));
+      }
+      return (await (await caches.open('asound-models-v1')).keys()).map(request => request.url);
+    }, { version, runtimes });
+    failRuntime = true;
+    const migrationStart = requests.length;
+    await page.reload();
+    await page.waitForFunction(() => window.started);
+    await page.waitForFunction(() => api.packStatus('voice').state === 'partial' && /HTTP 503/.test(api.packStatus('voice').error || ''));
+    assert.equal(await page.evaluate(() => window.weightDownloads || 0), 0);
+    failRuntime = false;
+    await page.evaluate(() => api.install('voice'));
+    await page.waitForFunction(() => api.packStatus('voice').state === 'installed');
+    assert.equal(await page.evaluate(() => window.weightDownloads || 0), 0, 'migration never downloads model weights');
+    assert.deepEqual(await page.evaluate(async () => (await (await caches.open('asound-models-v1')).keys()).map(request => request.url)), weightKeys);
+    assert.deepEqual([...new Set(requests.slice(migrationStart).filter(url => url.startsWith('vendor/') || url.startsWith('kokoro/')))],
+      runtimes.slice(0, 2), 'only missing plain assets are fetched; JSEP is not requested');
+    await context.setOffline(true);
+    await page.reload();
+    await page.waitForFunction(() => window.started);
+    assert.equal(await page.evaluate(() => api.packStatus('voice').state), 'installed');
+    assert.equal(await page.evaluate(() => window.weightDownloads || 0), 0);
+    passed.push('an older JSEP installation repairs only plain runtime files, retains model cache keys, and reopens offline');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ passed, errors }));
   } catch (error) {

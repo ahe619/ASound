@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "purpose": "Kokoro browser voice with the WASM-only ONNX Runtime; existing model weights and voices are unchanged.",
+  "build": "tools/kokoro-cpu/build.mjs",
+  "packageLockSha256": "85b9755bc3e724ce06f48abb9ce23f19363c3f569db47ebeee79bc87ac4a9448",
+  "dependencies": {
+    "kokoro-js": {
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/kokoro-js/-/kokoro-js-1.2.1.tgz",
+      "integrity": "sha512-oq0HZJWis3t8lERkMJh84WLU86dpYD0EuBPtqYnLlQzyFP1OkyBRDcweAqCfhNOpltyN9j/azp1H6uuC47gShw=="
+    },
+    "@huggingface/transformers": {
+      "version": "3.5.1",
+      "resolved": "https://registry.npmjs.org/@huggingface/transformers/-/transformers-3.5.1.tgz",
+      "integrity": "sha512-qWsPoJMBPYcrGuzRMVL//3dwcLXED9r+j+Hzw+hZpBfrMPdyq57ehNs7lew0D34Paj0DO0E0kZQjOZcIVN17hQ=="
+    },
+    "phonemizer": {
+      "version": "1.2.1",
+      "resolved": "https://registry.npmjs.org/phonemizer/-/phonemizer-1.2.1.tgz",
+      "integrity": "sha512-v0KJ4mi2T4Q7eJQ0W15Xd4G9k4kICSXE8bpDeJ8jisL4RyJhNWsweKTOi88QXFc4r4LZlz5jVL5lCHhkpdT71A=="
+    },
+    "onnxruntime-web": {
+      "version": "1.22.0-dev.20250409-89f8206ba4",
+      "resolved": "https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.22.0-dev.20250409-89f8206ba4.tgz",
+      "integrity": "sha512-0uS76OPgH0hWCPrFKlL8kYVV7ckM7t/36HfbgoFw6Nd0CZVVbQC4PkrR8mBX8LtNUFZO25IQBqV2Hx2ho3FlbQ=="
+    }
+  },
+  "sourceFiles": [
+    {
+      "path": "kokoro-js/dist/kokoro.js",
+      "sha256": "31b1db2aa4a7411f55786900f0cbdd0351f1063859b107f9a99699a03b098b7d"
+    },
+    {
+      "path": "phonemizer/dist/phonemizer.js",
+      "sha256": "193481f474f7c1ea81df3195d18b45df8ef7254dbdccb3f193d60215c4897bec"
+    },
+    {
+      "path": "@huggingface/transformers/dist/transformers.web.js",
+      "sha256": "9deecd2710229bb0739e2cc1cb415593b6a8a20e4f2881f406b71c2aa2affa1c"
+    },
+    {
+      "path": "onnxruntime-web/dist/ort.wasm.bundle.min.mjs",
+      "sha256": "ce886d4ba4d4612eb288715bc23794dd3fadbc9c83e27d2d984df4d1ba149524"
+    }
+  ],
+  "onnxRuntime": {
+    "version": "1.22.0-dev.20250409-89f8206ba4",
+    "commit": "89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0",
+    "license": "MIT",
+    "licenseSource": "https://github.com/microsoft/onnxruntime/blob/89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0/LICENSE"
+  },
+  "files": [
+    {
+      "path": "kokoro.web.js",
+      "bytes": 1786745,
+      "sha256": "094ec8d45aba89eaa9b79709486f840408dcadb5af0f2c6302f61577305265a3"
+    },
+    {
+      "path": "ort-cpu/ort-wasm-simd-threaded.mjs",
+      "bytes": 20856,
+      "sha256": "43c25054b6b9ac000f786c65545ff83a45f871e0e310e8c2f4d48a363bb66db4"
+    },
+    {
+      "path": "ort-cpu/ort-wasm-simd-threaded.wasm",
+      "bytes": 11133407,
+      "sha256": "f061472c6e77d6d50d079aacdc0ff9b63fee287ddd2cbf46cf62438d3891de2b"
+    },
+    {
+      "path": "ort-cpu/LICENSE.txt",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    }
+  ]
+}
