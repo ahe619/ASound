@@ -18,8 +18,8 @@ export const askJSON=(input,opts={})=>new Promise((resolve,reject)=>window.pendi
 export const ask=askJSON; export const aiErrorText=()=> 'Test failure'; export const aiStatus=()=>({state:'ready'});
 `;
 const harness = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="css/app.css"></head><body>
-<nav>${['talk','accent','vocab','models','me'].map(x=>`<button id="tab-${x}">${x}</button>`).join('')}</nav>
-${['talk-home','chat','summary','accent','vocab','me','models','mode'].map(x=>`<main class="view" id="view-${x}"><div class="wrap stack" id="${x==='talk-home'?'talk-home':x}"></div></main>`).join('')}
+<nav>${['talk','accent','vocab','voices','models','me'].map(x=>`<button id="tab-${x}">${x}</button>`).join('')}</nav>
+${['talk-home','chat','summary','accent','vocab','voices','me','models','mode'].map(x=>`<main class="view" id="view-${x}"><div class="wrap stack" id="${x==='talk-home'?'talk-home':x}"></div></main>`).join('')}
 <div id="toast" hidden></div>
 <script type="module">
 import {setLanguage,t} from './js/i18n.js';

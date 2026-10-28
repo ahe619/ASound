@@ -15,7 +15,7 @@ async function fixture(hash = "") {
   const history = { state: null };
   const context = {
     state, history, prefs: { uiLang: "en" }, URLSearchParams,
-    TABS: ["talk", "accent", "vocab", "models", "me"],
+    TABS: ["talk", "accent", "vocab", "voices", "models", "me"],
     location: { protocol: "https:", hash, search: "" }, navigator: { userAgent: "Test browser" },
     window: { addEventListener: noop, requestIdleCallback: noop },
     document: { body: { append: value => calls.errors.push(value) } },
@@ -30,7 +30,7 @@ async function fixture(hash = "") {
   };
   for (const name of ["initLayout", "registerTab", "registerTabCleanup", "initTalk", "initAccent", "initSettings",
     "onStoreChange", "renderTalkHome", "renderAccent", "cleanupAccent", "renderVocab", "cleanupVocab", "renderMe", "renderModels",
-    "paintVocabCount", "repaintSaveButtons", "initUpdates", "initSpeechFeedback", "warmUp", "show", "showModels", "applyI18n", "isVocabPracticing"])
+    "paintVocabCount", "repaintSaveButtons", "initUpdates", "initSpeechFeedback", "warmUp", "stopSpeaking", "renderVoices", "show", "showModels", "applyI18n", "isVocabPracticing"])
     context[name] = noop;
   vm.runInNewContext(source, context);
   await flush();

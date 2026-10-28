@@ -39,9 +39,7 @@ export const onStatus=fn=>{listener=fn};export const synthesize=(text,{signal}={
    (await import('./js/state.js')).prefs.voiceEngine='standard';
    (await import('./js/speech.js')).configureVoice({mode:'web',base:origin+'/',canon:origin+'/',cache:'test-voices'});
   });
-  await page.click('#settings-open');
-  await page.locator('#settings-voice > summary').click();
-  await page.locator('#settings-voice-library > summary').click();
+  await page.click('#tab-voices');
   assert.equal(await page.locator('.voice-grid .speak').count(),16);
   for(let i=0;i<16;i++){
    await page.locator('.voice-grid .speak').nth(i).click();
@@ -51,6 +49,11 @@ export const onStatus=fn=>{listener=fn};export const synthesize=(text,{signal}={
   assert.equal(new Set(requests.filter(url=>url.includes('/audio/voices/'))).size,16);
   assert.equal(requests.filter(url=>/kokoro\/neural|\.onnx|\.wasm|voices\/.*\.bin/.test(url)).length,0);
   console.log('16 recorded previews passed without model requests');
+  await page.locator('.voice-grid .speak').first().click();
+  await page.waitForFunction(async()=>(await import('./js/speech.js')).speechStatus().phase==='playing');
+  await page.click('#tab-vocab');
+  assert.equal(await page.evaluate(async()=>(await import('./js/speech.js')).speechStatus().phase),'idle','leaving Voices stops its preview');
+  await page.click('#tab-voices');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.evaluate(async()=>{(await import('./js/speech.js')).speak('This is a new lesson sentence.')});
   await page.locator('.speech-notice').waitFor({state:'visible'});
