@@ -408,7 +408,7 @@ function startRecorder(onLevel) {
     } finally { clearTimeout(timer); }
   };
   const take = async () => {
-    const res = await wait(mic.stop({ raw: true }));
+    const res = await wait(mic.stop({ raw: true, keepOpen: true }));
     ensureOpen();
     if (res?.audio?.length) parts.push(res.audio);
   };

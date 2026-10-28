@@ -29,7 +29,10 @@ const server = http.createServer((req, res) => {
   const errors = [], requests = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => requests.push(request.url()));
-  const read = () => page.evaluate(() => JSON.parse(localStorage.getItem('asound.wordstudy.v1')));
+  // Setup/draft writes are asynchronous now; wait behind writes already queued
+  // by the tested click before inspecting their durable result.
+  const read = () => page.evaluate(() => navigator.locks.request('asound.wordstudy.v1', () =>
+    JSON.parse(localStorage.getItem('asound.wordstudy.v1'))));
   const seed = async (practice, ids = ['bridge', 'harvest', 'balance'], extra = {}) => {
     await page.evaluate(({ practice, ids, extra }) => {
       const options = { deck: 'cet4', topic: '', scenario: '', size: 10, practice };

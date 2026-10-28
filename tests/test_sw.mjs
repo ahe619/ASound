@@ -32,7 +32,7 @@ function worker(version, files, storage = new CacheStorage(), manifest = assets(
     windows: [{ id: "one", url: SCOPE }], registration: { scope: SCOPE },
   };
   const context = {
-    URL, Request, Response, AbortController, AbortSignal, DOMException, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
+    URL, Request, Response, AbortController, AbortSignal, DOMException, MessageChannel, Date: class extends Date { static now() { return env.now ?? Date.now(); } },
     Uint8Array, crypto: webcrypto, caches: storage,
     setTimeout: (fn, ms) => setTimeout(fn, env.timeoutFor?.(ms) ?? ms), clearTimeout,
     fetch: async (request) => {
@@ -439,12 +439,17 @@ test("no AbortSignal.throwIfAborted call is left in the worker", () => {
   assert.doesNotMatch(source, /\.throwIfAborted\s*\(/);
 });
 
+const activeWorker = (version) => ({ postMessage(message, ports) {
+  assert.equal(message.type, "ASOUND_VERSION");
+  ports[0].postMessage({ version }); ports[0].close();
+} });
+
 test("without throwIfAborted, a fixed release replaces an active 0.3.2-0.3.6 release at once; others still wait", () => withoutModernAbortSignal(async () => {
   const install = async (previous, { active = true } = {}) => {
     const storage = new CacheStorage();
     if (previous) await (await storage.open(prefix + previous.version)).put(SCOPE + "__asound_release__", Response.json({ installed: 1, ...previous }));
     const w = worker("0.3.7-fixed", { "index.html": "page" }, storage);
-    if (active) w.registration.active = {};
+    if (active) w.registration.active = activeWorker(previous?.version || "");
     await w.dispatch("install");
     return w.skipped;
   };
@@ -455,6 +460,52 @@ test("without throwIfAborted, a fixed release replaces an active 0.3.2-0.3.6 rel
   assert.equal(await install({ version: "0.3.1-0123456789ab" }), 0, "a working older release keeps the explicit update flow");
   assert.equal(await install({ version: "0.3.5-862cb8bf6c4f" }, { active: false }), 0, "nothing to replace on a first install");
   assert.equal(await install(null), 0);
+}));
+
+test("a bad waiting release never forces a working active release to hand over its open tabs", () => withoutModernAbortSignal(async () => {
+  const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+  await (await storage.open(prefix + "0.3.1-working")).put(marker, Response.json({ version: "0.3.1-working", installed: 1 }));
+  await (await storage.open(prefix + "0.3.5-waiting")).put(marker, Response.json({ version: "0.3.5-waiting", installed: 2 }));
+  const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+  w.registration.active = activeWorker("0.3.1-working");
+  w.windows.push({ id: "two", url: SCOPE + "#accent" });
+  await w.dispatch("install");
+  assert.equal(w.skipped, 0, "the latest cache belongs to a waiting worker, not the working active worker");
+  assert.equal((await w.message("ASOUND_APPLY_UPDATE")).reason, "tabs");
+  assert.equal(w.skipped, 0, "the explicit multi-tab protection must remain effective");
+  w.windows.pop();
+  assert.equal((await w.message("ASOUND_APPLY_UPDATE")).ok, true);
+  assert.equal(w.skipped, 1, "the normal single-window update still applies");
+}));
+
+test("recovery follows the active marker even when a newer safe waiting snapshot exists", () => withoutModernAbortSignal(async () => {
+  const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+  await (await storage.open(prefix + "0.3.5-broken")).put(marker, Response.json({ version: "0.3.5-broken", installed: 1 }));
+  await (await storage.open(prefix + "0.3.6-waiting")).put(marker, Response.json({ version: "0.3.6-waiting", installed: 2, abortSafe: true }));
+  const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+  w.registration.active = activeWorker("0.3.5-broken");
+  w.windows.push({ id: "two", url: SCOPE });
+  await w.dispatch("install");
+  assert.equal(w.skipped, 1, "an actual broken active release can be recovered for both blocked tabs");
+}));
+
+test("uncertain active identity, timeout, or an active-worker change never triggers forced activation", () => withoutModernAbortSignal(async () => {
+  for (const kind of ["timeout", "send-error", "invalid-reply", "missing-marker", "wrong-cache-name", "active-changed"]) {
+    const storage = new CacheStorage(), marker = SCOPE + "__asound_release__";
+    if (kind !== "missing-marker") await (await storage.open(prefix + (kind === "wrong-cache-name" ? "other-version" : "0.3.5-old")))
+      .put(marker, Response.json({ version: "0.3.5-old", installed: 1 }));
+    const w = worker("0.3.7-fixed", { "index.html": "fixed" }, storage);
+    w.timeoutFor = ms => ms === 3000 ? 10 : ms;
+    w.registration.active = { postMessage(_message, ports) {
+      if (kind === "send-error") throw new Error("active worker is unavailable");
+      if (kind === "timeout") { ports[0].close(); return; }
+      if (kind === "active-changed") w.registration.active = activeWorker("0.3.6-working");
+      ports[0].postMessage({ version: kind === "invalid-reply" ? {} : "0.3.5-old" }); ports[0].close();
+    } };
+    await w.dispatch("install");
+    assert.equal(w.skipped, 0, kind);
+    assert.ok(await (await storage.open(prefix + "0.3.7-fixed")).match(marker), "a conservative decision does not discard the verified waiting release");
+  }
 }));
 
 test("engines with throwIfAborted keep the explicit update flow, and new snapshots are marked abort-safe", async () => {

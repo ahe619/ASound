@@ -36,7 +36,9 @@ function stopCapture() {
 // Repainting the same screen (language change, Settings closed) replaces the mic button. A take still recording
 // could not be stopped from the new button, so end it; a take being transcribed finishes and shows its result.
 function stopRecording() {
-  if (window.ASoundMic?.status?.().mic === "recording") stopCapture();
+  // The device can still report "off" while permission/worklet setup is pending.
+  // Ask each owned control to cancel preparation/recording, retaining only an ASR result already in flight.
+  for (const button of accentMics) cancelMicButton(button, { preserveTranscription: true });
 }
 const resultBox = (box, sameScreen) => box.isConnected ? box : sameScreen ? root().querySelector(".attempt-result") : null;
 
@@ -44,7 +46,6 @@ const resultBox = (box, sameScreen) => box.isConnected ? box : sameScreen ? root
 export function cleanupAccent() {
   stopSpeaking();
   stopCapture();
-  window.ASoundMic?.cancel?.(); // after a finished take the stream stays open (paused): release the device
 }
 
 export function renderAccent() {

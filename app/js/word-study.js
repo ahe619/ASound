@@ -8,7 +8,7 @@ import { createWordIllustration, warmPictures, preparePictures, hasPicture } fro
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
-  gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress, sayCorrect,
+  gradeProgress, readStudyState, commitStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress, sayCorrect,
   isAlternativeSpelling, isAlternativeSaying, spellingClue, MAX_SPOKEN_RESPONSE_LENGTH, STUDY_STATE_KEY, mergeProgress,
 } from "./word-study-core.js";
 
@@ -25,6 +25,14 @@ let saved = null;
 let showingSetup = false;
 let storageFailed = false;
 let resumeDiscarded = false;
+let reviewPending = false;
+function pendingAnswer() {
+  reviewPending = true;
+  const controls = [...host.querySelectorAll(".ws-option, .ws-grade, .ws-spelling-input, .ws-flashcard button[type=submit]")]
+    .map(node => [node, node.disabled]);
+  controls.forEach(([node]) => { node.disabled = true; });
+  return () => { controls.forEach(([node, disabled]) => { node.disabled = disabled; }); reviewPending = false; };
+}
 const studyMics = new Set();
 function studyMic(options) {
   const button = micButton(options);
@@ -62,7 +70,29 @@ function backToSetup() {
 }
 
 let draftTimer = 0;
+const DRAFT_KEY = "asound.wordstudy.draft.v1";
+const draftIdentity = session => JSON.stringify([session.ids, session.index, session.options, session.mode]);
+function backupDraft() {
+  // A page can disappear before an async lock is granted. This bounded, tab-local
+  // backup preserves only unsubmitted text; it never writes shared progress.
+  try {
+    const session = saved?.session;
+    if (session && !session.attempt && session.draft) sessionStorage.setItem(DRAFT_KEY,
+      JSON.stringify({ identity: draftIdentity(session), draft: session.draft }));
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {}
+}
+function restoreDraft() {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY)), session = saved?.session;
+    if (session && !session.attempt && draft?.identity === draftIdentity(session) && typeof draft.draft === "string") {
+      session.draft = draft.draft.slice(0, session.options.practice === "say" ? MAX_SPOKEN_RESPONSE_LENGTH : 300);
+    }
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch {}
+}
 function flushDraft() {
+  backupDraft();
   if (!draftTimer) return;
   clearTimeout(draftTimer);
   draftTimer = 0;
@@ -214,6 +244,7 @@ export async function renderWordStudy(root) {
       const previous = saved.session;
       saved.session = validateSession(previous);
       resumeDiscarded = !!previous && !saved.session;
+      restoreDraft();
     }
     // A saved session on a fresh visit has a real setup parent. Reloading an
     // existing practice entry reuses it instead of adding another history item.
@@ -244,8 +275,21 @@ export function isWordStudyActive() {
   return !!(host?.isConnected && !showingSetup && saved?.session && saved.session.index < saved.session.ids.length);
 }
 
-function persist() {
-  storageFailed = !saveStudyState(saved);
+function storageNotice() {
+  if (!host?.isConnected) return;
+  const old = host.querySelector(".ws-storage-warning");
+  if (storageFailed && !old) host.prepend(h("p", { class: "banner ws-storage-warning", role: "alert" }, t("wstudy.storageFailed")));
+  if (!storageFailed) old?.remove();
+  const footer = host.querySelector(".ws-card-footer > .hint-line");
+  if (footer) footer.textContent = t(storageFailed ? "wstudy.unsaved" : "wstudy.savedHere");
+}
+
+async function persist() {
+  const result = await commitStudyState(saved);
+  storageFailed = result === false;
+  storageNotice();
+  if (result) { try { sessionStorage.removeItem(DRAFT_KEY); } catch {} }
+  return result;
 }
 
 function paint(focusId = "") {
@@ -253,7 +297,7 @@ function paint(focusId = "") {
   stopStudyCapture();
   prepareQuestion();
   paintVersion++;
-  const warning = storageFailed ? h("p", { class: "banner", role: "alert" }, t("wstudy.storageFailed")) : null;
+  const warning = storageFailed ? h("p", { class: "banner ws-storage-warning", role: "alert" }, t("wstudy.storageFailed")) : null;
   const session = saved.session;
   fill(host, warning, !showingSetup && session
     ? session.index >= session.ids.length ? finishedView() : cardView()
@@ -533,14 +577,22 @@ function spellingQuestion(session, index, word) {
   h("p", { id: "ws-spelling-hint", class: "hint-line" }, t("wstudy.spellingHint")), alternative, submit);
 }
 
-function submitAnswer(session, index, word, practice, response) {
-  if (!host?.isConnected || saved.session !== session || session.index !== index || session.attempt
+async function submitAnswer(session, index, word, practice, response) {
+  if (reviewPending || !host?.isConnected || saved.session !== session || session.index !== index || session.attempt
       || session.options.practice !== practice || !response.trim()
       || (practice === "choice" && !session.choices.includes(response))) return;
   stopSpeaking();
   if (practice === "say" && response.length > MAX_SPOKEN_RESPONSE_LENGTH) {
     toast(t("wstudy.sayTooLong"));
     return; // Do not grade an answer that cannot be saved intact.
+  }
+  if (practice !== "choice") {
+    // Retain recognized speech as an editable draft too. A failed save should
+    // let the learner retry the same answer without another recording.
+    session.draft = response;
+    const input = host.querySelector(practice === "say" ? "#ws-say-input" : "#ws-spelling");
+    if (input) input.value = response;
+    backupDraft();
   }
   if ((practice === "spelling" && isAlternativeSpelling(response, word, bank.words))
       || (practice === "say" && isAlternativeSaying(response, word, bank.words))) {
@@ -551,12 +603,19 @@ function submitAnswer(session, index, word, practice, response) {
   }
   const correct = judge(practice, response, word);
   const answeredAt = Date.now();
-  saved.progress[word.id] = answerProgress(saved.progress[word.id], correct, practice, answeredAt);
-  session.attempt = { practice, response, correct, answeredAt };
-  session.revealed = true;
-  session.draft = "";
-  persist();
-  paint("ws-feedback");
+  const finishPending = pendingAnswer();
+  try {
+    const result = await commitStudyState(saved, next => {
+      if (saved.session !== session || session.index !== index || session.attempt) return false;
+      next.progress[word.id] = answerProgress(next.progress[word.id], correct, practice, answeredAt);
+      next.session.attempt = { practice, response, correct, answeredAt };
+      next.session.revealed = true;
+      next.session.draft = "";
+    });
+    storageFailed = result === false;
+    storageNotice();
+    if (result && saved.session === session && session.index === index) paint(showingSetup ? "" : "ws-feedback");
+  } finally { finishPending(); }
 }
 
 // How an answer is checked, per practice.
@@ -575,7 +634,13 @@ function sayQuestion(session, index, word) {
   const typed = h("input", { type: "text", id: "ws-say-input", class: "ws-spelling-input", autocomplete: "off", autocapitalize: "none", autocorrect: "off",
     spellcheck: "false", lang: "en", maxlength: String(MAX_SPOKEN_RESPONSE_LENGTH), placeholder: t("wstudy.sayTypePlaceholder"), "aria-label": t("wstudy.sayTypePlaceholder") });
   typed.value = session.draft || "";
-  typed.addEventListener("input", () => { alternative.hidden = true; });
+  typed.addEventListener("input", () => {
+    alternative.hidden = true;
+    session.draft = typed.value;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => { draftTimer = 0; persist(); }, 400);
+  });
+  typed.addEventListener("blur", flushDraft);
   const mic = studyMic({
     big: true, label: t("wstudy.sayMic"),
     onAudio: (audio) => { lastTake = { wordId: word.id, audio: audio.slice() }; },
@@ -661,12 +726,26 @@ function advance(session) {
   paint(session.index < session.ids.length ? session.options.practice === "spelling" ? "ws-spelling" : "ws-word" : "ws-finished");
 }
 
-function grade(session, index, word, rating) {
-  if (!host?.isConnected || saved.session !== session || session.index !== index || !session.revealed) return;
+async function grade(session, index, word, rating) {
+  if (reviewPending || !host?.isConnected || saved.session !== session || session.index !== index || !session.revealed) return;
   stopSpeaking();
-  saved.progress[word.id] = gradeProgress(saved.progress[word.id], rating);
-  session.ratings.push({ id: word.id, rating });
-  advance(session);
+  const reviewedAt = Date.now();
+  const finishPending = pendingAnswer();
+  try {
+    const result = await commitStudyState(saved, next => {
+      if (saved.session !== session || session.index !== index || !session.revealed) return false;
+      next.progress[word.id] = gradeProgress(next.progress[word.id], rating, reviewedAt);
+      next.session.ratings.push({ id: word.id, rating });
+      next.session.index++;
+      next.session.revealed = false;
+      next.session.attempt = null;
+      next.session.choices = [];
+      next.session.draft = "";
+    });
+    storageFailed = result === false;
+    storageNotice();
+    if (result && saved.session === session) paint(showingSetup ? "" : session.index < session.ids.length ? "ws-word" : "ws-finished");
+  } finally { finishPending(); }
 }
 
 function retry(session, words) {

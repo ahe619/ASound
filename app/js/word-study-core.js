@@ -274,6 +274,72 @@ export function saveStudyState(state, storage) {
   } catch { return false; }
 }
 
+let lockDatabase = null;
+function databaseLock(action, indexedDB) {
+  if (!indexedDB?.open) return Promise.reject(new Error("Study storage locking is unavailable"));
+  if (!lockDatabase) lockDatabase = new Promise((resolve, reject) => {
+    const request = indexedDB.open("asound-study-write-lock", 1);
+    let expired = false;
+    const timer = setTimeout(() => fail(new Error("Study storage is busy")), 5000);
+    const fail = error => { expired = true; clearTimeout(timer); reject(error); };
+    request.onupgradeneeded = () => { request.result.createObjectStore("lock"); };
+    request.onerror = () => fail(request.error);
+    request.onblocked = () => fail(new Error("Study storage is blocked"));
+    request.onsuccess = () => {
+      clearTimeout(timer);
+      if (expired) { request.result.close(); return; }
+      const db = request.result;
+      db.onversionchange = () => { db.close(); lockDatabase = null; };
+      resolve(db);
+    };
+  }).catch(error => { lockDatabase = null; throw error; });
+  return lockDatabase.then(db => new Promise((resolve, reject) => {
+    // IndexedDB serializes readwrite transactions across tabs. Only the lock lives
+    // here; all learning data remains in its existing localStorage entry.
+    const tx = db.transaction("lock", "readwrite");
+    let result, failure, completed = false;
+    tx.oncomplete = () => resolve(result);
+    // The durable write is localStorage. A later failure of this empty lock
+    // transaction cannot undo it and must not invite a duplicate review retry.
+    tx.onabort = tx.onerror = () => completed ? resolve(result) : reject(failure || tx.error || new Error("Study storage failed"));
+    const request = tx.objectStore("lock").get("guard");
+    request.onsuccess = () => {
+      try { result = action(); completed = true; } catch (error) { failure = error; tx.abort(); }
+    };
+  }));
+}
+
+// Every UI write uses this transaction, including draft/setup saves. The optional
+// mutation runs synchronously after reading current progress, so two simultaneous
+// reviews each build on the preceding review instead of competing snapshots.
+// true: committed; null: stale UI operation skipped; false: storage unavailable.
+export async function commitStudyState(state, mutate = null, options = {}) {
+  try {
+    const store = options.storage ?? globalThis.localStorage;
+    const action = () => {
+      const next = cleanState(state);
+      let stored;
+      // A failed read must not be mistaken for empty data and overwrite progress.
+      const raw = store.getItem(KEY);
+      try { stored = cleanState(JSON.parse(raw)); } catch { stored = cleanState(null); }
+      mergeProgress(next.progress, stored.progress);
+      if (mutate && mutate(next) === false) return null;
+      store.setItem(KEY, JSON.stringify({ schemaVersion: 1, ...next }));
+      Object.assign(state.progress, next.progress);
+      // Keep the live session identity: input handlers and navigation own this
+      // object. Failed writes leave both the question and its answer unmodified.
+      if (mutate) {
+        if (state.session && next.session) Object.assign(state.session, next.session);
+        else state.session = next.session;
+      }
+      return true;
+    };
+    const locks = Object.prototype.hasOwnProperty.call(options, "locks") ? options.locks : globalThis.navigator?.locks;
+    if (locks?.request) return await locks.request(KEY, { mode: "exclusive" }, action);
+    return await databaseLock(action, options.indexedDB ?? globalThis.indexedDB);
+  } catch { return false; }
+}
+
 let bankPromise = null;
 export function loadWordBank() {
   if (!bankPromise) bankPromise = (async () => {

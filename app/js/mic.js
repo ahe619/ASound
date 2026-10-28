@@ -47,8 +47,8 @@ function cancelCurrent() {
   window.ASoundMic.cancel();
   if (current === control) control.reset();
 }
-export function cancelMicButton(button) {
-  if (current?.button === button) cancelCurrent();
+export function cancelMicButton(button, { preserveTranscription = false } = {}) {
+  if (current?.button === button && !(preserveTranscription && current.transcribing)) cancelCurrent();
 }
 const wasCancelled = (e) => e && (e.name === "AbortError" || e.code === "cancelled");
 
@@ -65,7 +65,7 @@ export function micButton({ onText, onAudio, big = false, label, lang = "" } = {
     btn.title = text;
     if (state !== "rec") btn.style.setProperty("--lvl", 0);
   };
-  const control = { button: btn, reset() {
+  const control = { button: btn, get transcribing() { return state === "busy"; }, reset() {
     ++operation;
     state = "idle";
     if (current === control) current = null;

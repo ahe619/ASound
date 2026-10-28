@@ -215,14 +215,37 @@ async function installRelease() {
   }
 }
 
+function workerVersion(worker) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    let finished = false;
+    const finish = (version) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(typeof version === "string" && version.length <= 96 ? version : "");
+    };
+    const timer = setTimeout(() => finish(""), 3000);
+    channel.port1.onmessage = (event) => finish(event.data?.version);
+    try { worker.postMessage({ type: "ASOUND_VERSION" }, [channel.port2]); }
+    catch { channel.port2.close(); finish(""); }
+  });
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
-    await installRelease(); // Deliberately wait for the user or for all old windows to close...
-    // ...unless the active release is one that answers every page with the offline 503 on this engine
-    // (no throwIfAborted: Safari before 15.4, Chromium before 100). No window can ask it for this update.
-    const previous = (await completeCaches())[0];
-    if (!("throwIfAborted" in AbortSignal.prototype) && self.registration.active && previous
-        && !previous.abortSafe && ABORT_UNSAFE_RELEASE.test(previous.version)) await self.skipWaiting();
+    await installRelease(); // Normally activation waits for the user's explicit update request.
+    if ("throwIfAborted" in AbortSignal.prototype) return;
+    const active = self.registration.active;
+    if (!active) return;
+    // A newer complete cache can belong to a waiting worker. Ask the actual active
+    // worker: even a release with a broken fetch handler can answer this message.
+    const version = await workerVersion(active).catch(() => "");
+    if (self.registration.active !== active || !ABORT_UNSAFE_RELEASE.test(version)) return;
+    const previous = (await completeCaches()).find(release => release.name === PREFIX + version && release.version === version);
+    // Missing/uncertain replies or markers keep the normal multi-window update flow.
+    if (self.registration.active === active && previous && !previous.abortSafe) await self.skipWaiting();
   })());
 });
 

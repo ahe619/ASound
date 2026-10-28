@@ -299,12 +299,21 @@
     record: (handlers = {}) => startCapture(handlers, "recording"),
     // Stop a manual recording; resolves {text, audio} (audio: 16 kHz Float32Array, kept for pitch analysis).
     // stop({raw: true}) skips the English transcription (for transcribeNative).
-    async stop({ raw = false } = {}) {
+    // Only rolling raw segments may explicitly retain capture, so their next segment
+    // reuses the context opened in the original user tap (required by mobile Safari).
+    async stop({ raw = false, keepOpen = false } = {}) {
       if (mic.state !== "recording") return { text: "", audio: null };
       const id = capture;
       let audio = joinFrames(mic.frames);
       mic.frames = [];
-      mic.state = "paused";
+      // A manual take is over; only its copied samples are needed for transcription.
+      // Keep its generation and handlers so cancellation can still suppress a late
+      // result, but release capture now, even for silence or a failed recognizer.
+      if (raw && keepOpen) mic.state = "paused";
+      else {
+        release(mic);
+        Object.assign(mic, { stream: null, ctx: null, node: null, src: null, state: "off" });
+      }
       emit();
       requireCapture(id);
       if (audio.length < 0.3 * RATE || raw) return { text: "", audio }; // raw: the whole recording (timed segments)

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { TOPICS, SCENARIOS, normalizeOptions, filterWords, chooseWords, gradeProgress, readStudyState, saveStudyState,
   meaningChoices, spellingCorrect, answerProgress, isAlternativeSpelling, spellingClue, isAlternativeSaying,
-  sayCorrect, MAX_SPOKEN_RESPONSE_LENGTH, STUDY_STATE_KEY, mergeProgress } from "../app/js/word-study-core.js";
+  sayCorrect, MAX_SPOKEN_RESPONSE_LENGTH, STUDY_STATE_KEY, mergeProgress, commitStudyState } from "../app/js/word-study-core.js";
 
 const words = [
   { id: "ticket", term: "ticket", general: true, exams: ["cet4", "cet6"], topics: ["travel"], scenarios: ["transport"] },
@@ -14,6 +14,78 @@ const words = [
 ];
 const ids = rows => rows.map(row => row.id).sort();
 const memory = () => { const values = new Map(); return { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) }; };
+const serialLocks = () => {
+  let pending = Promise.resolve();
+  return { request(_name, _options, action) { const result = pending.then(action); pending = result.catch(() => {}); return result; } };
+};
+
+test("a stale tab applies its new wrong answer to the latest shared progress", async () => {
+  const storage = memory(), locks = serialLocks(), config = { storage, locks };
+  saveStudyState({ progress: { bridge: answerProgress(null, true, "choice", 1000) } }, storage);
+  const first = readStudyState(storage), stale = readStudyState(storage);
+  for (const now of [2000, 3000]) assert.equal(await commitStudyState(first, next => {
+    next.progress.bridge = answerProgress(next.progress.bridge, true, "choice", now);
+  }, config), true);
+  assert.equal(await commitStudyState(stale, next => {
+    next.progress.bridge = answerProgress(next.progress.bridge, false, "spelling", 4000);
+  }, config), true);
+  const actual = readStudyState(storage).progress.bridge;
+  assert.equal(actual.seen, 4); assert.equal(actual.answers, 4); assert.equal(actual.correctAnswers, 3);
+  assert.equal(actual.lastAnswerCorrect, false); assert.equal(actual.box, 0); assert.equal(actual.due, 604000);
+  assert.deepEqual(stale.progress.bridge, actual);
+  // Saving settings/old feedback cannot replay its review or replace the failure.
+  assert.equal(await commitStudyState(first, null, config), true);
+  assert.deepEqual(readStudyState(storage).progress.bridge, actual);
+});
+
+test("simultaneous reviews and settings saves retain every review exactly once", async () => {
+  const storage = memory(), locks = serialLocks(), config = { storage, locks };
+  const tabs = Array.from({ length: 8 }, () => readStudyState(storage));
+  const results = await Promise.all(tabs.map((state, index) => commitStudyState(state, next => {
+    next.progress.bridge = answerProgress(next.progress.bridge, index % 2 === 0, "choice", 1000 + index);
+    if (index === 2) next.progress.ticket = gradeProgress(next.progress.ticket, "good", 1000 + index);
+  }, config)));
+  assert.ok(results.every(result => result === true));
+  await Promise.all(tabs.map(state => commitStudyState(state, null, config)));
+  const progress = readStudyState(storage).progress;
+  assert.equal(progress.bridge.seen, 8); assert.equal(progress.bridge.answers, 8);
+  assert.equal(progress.bridge.correctAnswers, 4); assert.equal(progress.bridge.lastAnswerCorrect, false);
+  assert.equal(progress.ticket.seen, 1);
+});
+
+test("a review commits feedback with progress while preserving live session identity", async () => {
+  const storage = memory(), locks = serialLocks(), options = normalizeOptions({ practice: "spelling" });
+  saveStudyState({ options, progress: {}, session: { ids: ["bridge"], index: 0, options, draft: "brigde", ratings: [] } }, storage);
+  const state = readStudyState(storage), session = state.session;
+  const attempt = { practice: "spelling", response: "brigde", correct: false, answeredAt: 100 };
+  assert.equal(await commitStudyState(state, next => {
+    next.progress.bridge = answerProgress(next.progress.bridge, false, "spelling", 100);
+    next.session.attempt = attempt; next.session.revealed = true; next.session.draft = "";
+  }, { storage, locks }), true);
+  assert.equal(state.session, session);
+  assert.deepEqual(readStudyState(storage).session.attempt, attempt);
+  assert.equal(readStudyState(storage).progress.bridge.answers, 1);
+  await commitStudyState(state, null, { storage, locks });
+  assert.equal(readStudyState(storage).progress.bridge.answers, 1);
+});
+
+test("failed reads/writes/locking and canceled reviews never mutate or claim a saved answer", async () => {
+  const storage = memory(), locks = serialLocks(), state = readStudyState(storage);
+  const before = JSON.stringify(state);
+  const review = next => { next.progress.bridge = answerProgress(next.progress.bridge, false, "choice", 100); };
+  assert.equal(await commitStudyState(state, review, { locks, storage: {
+    getItem: () => null, setItem: () => { throw new Error("quota"); },
+  } }), false);
+  let writes = 0;
+  assert.equal(await commitStudyState(state, review, { locks, storage: {
+    getItem: () => { throw new Error("denied"); }, setItem: () => writes++,
+  } }), false);
+  assert.equal(writes, 0);
+  assert.equal(await commitStudyState(state, review, { storage, locks: null, indexedDB: {} }), false);
+  assert.equal(await commitStudyState(state, () => false, { storage, locks }), null);
+  assert.equal(JSON.stringify(state), before);
+  assert.equal(storage.getItem(STUDY_STATE_KEY), undefined);
+});
 
 test("empty topic and scene allow all words in the chosen deck; either optional filter works independently", () => {
   assert.deepEqual(ids(filterWords(words, {})), ["menu", "reservation", "ticket"]);
