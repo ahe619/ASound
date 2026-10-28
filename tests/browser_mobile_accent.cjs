@@ -14,9 +14,9 @@ const cpu = `export class Wllama {
 const voice = `window.diag.voiceLoads++;export const configure=()=>{};export const onStatus=()=>{};
 export const synthesize=async()=>{window.diag.voiceCalls++;return {pcm:new Float32Array(2400),sr:24000}};`;
 const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>true,hasNative:()=>false,
- status:()=>({asr:'ready',mic:'off'}),onStatus:()=>()=>{},configure(){},configureHelp(){},
- preload(){window.diag.asrPreloads++},cancel(){window.recording=false},
- async record(){window.recording=true},async stop(){window.recording=false;return {text:'zebra',audio:new Float32Array(16000)}}};`;
+ status:()=>({asr:'ready',mic:window.recording?'recording':'off'}),onStatus:()=>()=>{},configure(){},configureHelp(){},
+ preload(){window.diag.asrPreloads++},cancel(){window.recording=false;window.cancels=(window.cancels||0)+1},
+ async record(){window.recording=true},async stop(){window.recording=false;await window.heldTranscript;return {text:'zebra',audio:new Float32Array(16000)}}};`;
 
 (async()=>{
  const catalog=JSON.parse(await fs.readFile(path.join(app,'packs.json'),'utf8'));
@@ -96,6 +96,35 @@ const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>tru
    assert.equal(await page.locator('#accent .speak').count(),2);assert.equal(await page.locator('#accent .mic-btn').count(),1);
    await f.idleModels();assert.deepEqual(f.errors,[]);await f.context.close();
    passed.push(`${profile.name}: installed LLM/ASR/voice; roll/new passage/drill/missed-word results use zero LLM or voice initialization, even in desktop layout`);
+  }
+  {
+   const f=await fixture(mobileProfiles[2]),{page}=f;
+   const off=async(where)=>assert.equal(await page.evaluate(()=>recording),false,`${where} must stop the microphone`);
+   async function startRecording(scope='#accent'){await page.locator(`${scope} .mic-btn`).first().click();await page.waitForFunction(()=>recording);}
+   await page.click('#check-start');await page.locator('#accent .drill-text.para').waitFor();
+   await startRecording();await page.locator('#accent .drill-nav button').last().click();await off('New paragraph');
+   await startRecording();await page.locator('#accent .drill-nav button').first().click();await off('Again');
+   await startRecording();await page.locator('#accent .sum-head .back').click();await off('Back home');
+   await page.click('#drill-start');await page.locator('#accent .drill-text:not(.para)').waitFor();
+   await startRecording();await page.locator('#accent .drill-nav button').last().click();await off('Next');
+   await startRecording();await page.locator('#accent .drill-nav button').first().click();await off('Prev');
+   await startRecording();await page.click('#tab-talk');await off('Switching to Talk');
+   await page.click('#tab-accent');await page.locator('#accent .mic-btn:not(.rec)').waitFor();
+   await startRecording();await page.locator('#accent .sum-head .back').click();await off('Change drill');
+   await page.click('#drill-start');await page.locator('#accent .drill-text:not(.para)').waitFor();
+   await f.record();const cancels=await page.evaluate(()=>window.cancels||0);await page.click('#tab-talk');
+   assert.ok(await page.evaluate(()=>window.cancels)>cancels,'leaving after a finished take releases the paused microphone');
+   await page.click('#tab-accent');await page.locator('#accent .drill-nav button').last().click();await page.locator('#accent .score').waitFor({state:'detached'});
+   const repaint=()=>page.evaluate(async()=>(await import('./js/accent.js')).renderAccent()); // what a language change or closing Settings does
+   await startRecording();await repaint();await off('Repainting while recording');
+   await page.evaluate(()=>{window.heldTranscript=new Promise(resolve=>{window.releaseTranscript=resolve})});
+   await startRecording();await page.locator('#accent .mic-btn').click();await page.locator('#accent .mic-btn.busy').waitFor();
+   await repaint();await page.evaluate(()=>{window.heldTranscript=null;window.releaseTranscript()});
+   await page.locator('#accent .score').waitFor();
+   assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('asound.drill.v1')).items[1].attempt.heard),'zebra','a take being transcribed survives a repaint');
+   await page.click('#tab-me');await startRecording('#me');await page.click('#tab-accent');await off('Leaving Me');
+   assert.deepEqual(f.errors,[]);await f.context.close();
+   passed.push('leaving any accent screen (New paragraph, Again, Back, Next, Prev, Change drill, another tab) or the Me tab stops the microphone; a repaint keeps a take being transcribed');
   }
   {
    const f=await fixture({name:'desktop',mobile:false}),{page}=f;

@@ -14,6 +14,11 @@ const cancelledRuntimes = new Map();
 const RUNTIME_CANCEL_TTL = 60000;
 const RUNTIME_REQUEST_LIMIT = 128;
 const runtimeId = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{16,96}$/.test(value);
+// AbortSignal.throwIfAborted needs Safari 15.4 / Chromium 100; a TypeError in the fetch
+// handler would answer every request with the offline 503 on older devices.
+const checkAborted = (signal) => { if (signal && signal.aborted) throw signal.reason ?? new DOMException("The operation was aborted.", "AbortError"); };
+// Releases 0.3.2-0.3.6 called throwIfAborted directly. Their snapshots have no abortSafe marker.
+const ABORT_UNSAFE_RELEASE = /^0\.3\.[2-6]-/;
 const MIRROR_CONNECT_MS = 10000;
 const MIRROR_IDLE_MS = 20000;
 const MIRROR_TOTAL_MS = 180000;
@@ -72,7 +77,7 @@ async function boundedMirrorAsset(asset, url, signal, cache, mirror) {
     if (!reader) throw new Error("Asset response has no body");
     const chunks = []; let size = 0;
     while (true) {
-      controller.signal.throwIfAborted();
+      checkAborted(controller.signal);
       clearTimeout(idle);
       idle = setTimeout(() => controller.abort(new Error("Asset download stalled")), MIRROR_IDLE_MS);
       const { done, value } = await reader.read();
@@ -87,7 +92,7 @@ async function boundedMirrorAsset(asset, url, signal, cache, mirror) {
     chunks.length = 0;
     const hash = await crypto.subtle.digest("SHA-256", bytes);
     if (Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("") !== asset.sha256) throw new Error("Asset hash mismatch");
-    controller.signal.throwIfAborted();
+    checkAborted(controller.signal);
     return new Response(bytes, { headers: { "Content-Type": expected, "Content-Length": String(size) } });
   } finally {
     clearTimeout(idle); clearTimeout(total);
@@ -102,14 +107,14 @@ async function fetchAsset(asset, url, signal, cache) {
   if (!asset.mirrors?.length) {
     const response = await fetch(new Request(url, { cache, credentials: "same-origin", signal }));
     if (response.ok && response.type !== "opaque" && await digest(response) === asset.sha256) {
-      signal?.throwIfAborted();
+      checkAborted(signal);
       return response;
     }
   } else {
     for (const source of [...asset.mirrors, url]) {
-      signal?.throwIfAborted();
+      checkAborted(signal);
       try { return await boundedMirrorAsset(asset, source, signal, cache, source !== url); }
-      catch (error) { signal?.throwIfAborted(); }
+      catch (error) { checkAborted(signal); }
     }
   }
   throw new Error(`The release file could not be verified: ${asset.url}`);
@@ -151,7 +156,10 @@ async function completeCaches() {
     const cache = await caches.open(name);
     const marker = await cache.match(MARKER);
     if (!marker) continue;
-    try { out.push({ name, cache, installed: (await marker.json()).installed || 0 }); } catch {}
+    try {
+      const data = await marker.json();
+      out.push({ name, cache, installed: data.installed || 0, version: String(data.version || ""), abortSafe: data.abortSafe === true });
+    } catch {}
   }
   return out.sort((a, b) => b.installed - a.installed);
 }
@@ -198,7 +206,7 @@ async function installRelease() {
       await target.put(url, response);
     }
     // Only a completely verified snapshot gets this marker.
-    await target.put(MARKER, new Response(JSON.stringify({ version: RELEASE, installed: Date.now() }), {
+    await target.put(MARKER, new Response(JSON.stringify({ version: RELEASE, installed: Date.now(), abortSafe: true }), {
       headers: { "Content-Type": "application/json" },
     }));
   } catch (error) {
@@ -208,7 +216,14 @@ async function installRelease() {
 }
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(installRelease()); // Deliberately wait for the user or for all old windows to close.
+  event.waitUntil((async () => {
+    await installRelease(); // Deliberately wait for the user or for all old windows to close...
+    // ...unless the active release is one that answers every page with the offline 503 on this engine
+    // (no throwIfAborted: Safari before 15.4, Chromium before 100). No window can ask it for this update.
+    const previous = (await completeCaches())[0];
+    if (!("throwIfAborted" in AbortSignal.prototype) && self.registration.active && previous
+        && !previous.abortSafe && ABORT_UNSAFE_RELEASE.test(previous.version)) await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {
@@ -279,22 +294,22 @@ self.addEventListener("fetch", (event) => {
     try {
       if (runtime?.rejected) throw new Error("Runtime request limit or duplicate ID");
       const signal = runtime?.controller.signal || request.signal;
-      signal.throwIfAborted();
+      checkAborted(signal);
       const cached = await (await caches.open(CACHE)).match(url.href);
-      signal.throwIfAborted();
+      checkAborted(signal);
       if (cached) return cached;
       // A browser can evict an individual file. Recover only this exact release's bytes.
       // An on-demand file first used after this release was installed sits in the previous release's cache.
       for (const old of await completeCaches()) {
         const hit = await old.cache.match(url.href);
         if (hit && await digest(hit) === asset.sha256) {
-          signal.throwIfAborted();
+          checkAborted(signal);
           await (await caches.open(CACHE)).put(url.href, hit.clone());
           return hit;
         }
       }
       const response = await fetchAsset(asset, url.href, signal, "no-store");
-      signal.throwIfAborted();
+      checkAborted(signal);
       await (await caches.open(CACHE)).put(url.href, response.clone());
       return response;
     } catch {} finally {

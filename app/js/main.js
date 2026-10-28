@@ -4,7 +4,7 @@ import { $, h } from "./util.js";
 import { setLanguage, applyI18n, t } from "./i18n.js";
 import { registerTab, registerTabCleanup, setTab, show, initNavigation, navigate, currentRoute } from "./nav.js";
 import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
-import { initAccent, renderAccent } from "./accent.js";
+import { initAccent, renderAccent, cleanupAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
 import { renderMe } from "./me.js";
 import { initSettings } from "./settings.js";
@@ -50,6 +50,7 @@ async function boot() {
   syncLabels();
   registerTab("talk", () => { if (state.talkView === "home") renderTalkHome(); });
   registerTab("accent", renderAccent);
+  registerTabCleanup("accent", cleanupAccent);
   registerTab("vocab", renderVocab);
   registerTabCleanup("vocab", cleanupVocab);
   window.addEventListener("pagehide", cleanupVocab);
@@ -57,6 +58,7 @@ async function boot() {
     if (event.persisted && state.tab === "vocab") renderVocab();
   });
   registerTab("me", renderMe);
+  registerTabCleanup("me", () => window.ASoundMic?.cancel?.()); // "Find a voice like yours" records on Me
   for (const tab of ["talk", "accent", "vocab", "me"]) $("#tab-" + tab).addEventListener("click", () => setTab(tab));
 
   initTalk();

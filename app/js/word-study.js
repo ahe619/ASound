@@ -9,7 +9,7 @@ import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScr
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
   gradeProgress, readStudyState, saveStudyState, PRACTICES, meaningChoices, spellingCorrect, answerProgress, sayCorrect,
-  isAlternativeSpelling, isAlternativeSaying, spellingClue, MAX_SPOKEN_RESPONSE_LENGTH,
+  isAlternativeSpelling, isAlternativeSaying, spellingClue, MAX_SPOKEN_RESPONSE_LENGTH, STUDY_STATE_KEY, mergeProgress,
 } from "./word-study-core.js";
 
 const DECKS = ["general", "cet4", "cet6", "kaoyan"];
@@ -70,6 +70,18 @@ function flushDraft() {
 }
 window.addEventListener("pagehide", () => { generation++; stopStudyCapture(); stopSpeaking(); stopCompare(); flushDraft(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) flushDraft(); }); // a phone switching apps
+// Another window (a second tab, or the installed app beside a browser tab) saved progress: count it here too.
+window.addEventListener("storage", event => {
+  if (!saved || (event.key !== null && event.key !== STUDY_STATE_KEY)) return;
+  if (!mergeProgress(saved.progress, readStudyState().progress) || !showingSetup || !host?.isConnected) return;
+  // Update the counts without disturbing this window: keep the source panel, the focus and the scroll position.
+  const active = host.contains(document.activeElement) ? document.activeElement : null;
+  const summary = !!active?.matches(".ws-source > summary");
+  const sourceOpen = !!host.querySelector(".ws-source")?.open;
+  paint();
+  if (sourceOpen) host.querySelector(".ws-source")?.setAttribute("open", "");
+  (active?.id ? host.querySelector(`#${active.id}`) : summary ? host.querySelector(".ws-source > summary") : null)?.focus({ preventScroll: true });
+});
 
 // Keyboard on a computer: 1-4 (or A-D) pick an option or a rating, Space shows the answer, Enter goes on.
 document.addEventListener("keydown", event => {

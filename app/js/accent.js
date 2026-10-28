@@ -7,7 +7,7 @@ import { askJSON, aiErrorText } from "./ai.js";
 import * as P from "./prompts.js";
 import { readingMatch } from "./diff.js";
 import { speakBtn, stopSpeaking, unlockAudio, prefetchSpeech } from "./speech.js";
-import { micButton } from "./mic.js";
+import { micButton, cancelMicButton } from "./mic.js";
 import { checks, drillStore } from "./store.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
 import { modeCards } from "./modes.js";
@@ -20,6 +20,32 @@ let check = null;         // {text, meaning, attempt}
 
 const root = () => $("#accent");
 const scrollTop = () => { $("#view-accent").scrollTop = 0; };
+
+// A recording (or its transcription) belongs to the sentence or paragraph that started it. Moving to another one
+// or leaving the tab stops it, so the microphone never stays on behind another screen or scores a stale transcript.
+const accentMics = new Set();
+function accentMic(options) {
+  const button = micButton(options);
+  accentMics.add(button);
+  return button;
+}
+function stopCapture() {
+  for (const button of accentMics) cancelMicButton(button);
+  accentMics.clear();
+}
+// Repainting the same screen (language change, Settings closed) replaces the mic button. A take still recording
+// could not be stopped from the new button, so end it; a take being transcribed finishes and shows its result.
+function stopRecording() {
+  if (window.ASoundMic?.status?.().mic === "recording") stopCapture();
+}
+const resultBox = (box, sameScreen) => box.isConnected ? box : sameScreen ? root().querySelector(".attempt-result") : null;
+
+// Leaving the Accent tab: stop the voice and the microphone, keep the drill to come back to.
+export function cleanupAccent() {
+  stopSpeaking();
+  stopCapture();
+  window.ASoundMic?.cancel?.(); // after a finished take the stream stays open (paused): release the device
+}
 
 export function renderAccent() {
   if (view === "drill" && drill) renderDrill();
@@ -35,6 +61,7 @@ export function initAccent() {
 /* ---------- home ---------- */
 
 function renderHome() {
+  stopCapture();
   view = "home";
   const zh = getLanguage() !== "en"; // show the localized name under the English one
   const grid = h("div", { class: "grid", role: "group", "aria-label": t("accent.drills") }, DRILLS.map((d) => h("button", {
@@ -73,6 +100,7 @@ function bankItems(d, count, skip = new Set()) {
 }
 
 function startDrill() {
+  stopCapture();
   const mobile = deviceInfo().mobile;
   if (!mobile) unlockAudio();
   stopSpeaking();
@@ -137,6 +165,7 @@ function leaveDrill() {
 
 function moveDrill(step) {
   stopSpeaking();
+  stopCapture();
   drill.idx = Math.min(drill.items.length - 1, Math.max(0, drill.idx + step));
   drillStore.set(drill);
   renderDrill();
@@ -144,9 +173,10 @@ function moveDrill(step) {
 }
 
 function renderDrill() {
+  stopRecording();
   const d = drillById(drill.drillId), it = drill.items[drill.idx];
   if (!deviceInfo().mobile) prefetchSpeech(it.text); // Mobile voices start only when Listen is tapped.
-  const result = h("div", { class: "stack-sm" });
+  const result = h("div", { class: "stack-sm attempt-result" });
   if (it.attempt) paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill));
   const ipaLine = it.ipa ? h("p", { class: "ipa-line", hidden: !prefs.showIpa }, fmtIpa(it.ipa)) : null;
   const ipaBtn = it.ipa ? h("button", { type: "button", class: "mini" }, prefs.showIpa ? t("accent.hideIpa") : t("accent.showIpa")) : null;
@@ -177,7 +207,12 @@ function renderDrill() {
       h("div", { class: "stack-xs" },
         h("span", { class: "mini-label" }, t("accent.yourTurn")),
         h("div", { class: "attempt-row" },
-          micButton({ big: true, label: t("accent.record"), onText: (heard) => { it.attempt = { heard, analysis: null }; drillStore.set(drill); paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill)); } }),
+          accentMic({ big: true, label: t("accent.record"), onText: (heard) => {
+            it.attempt = { heard, analysis: null };
+            drillStore.set(drill);
+            const box = resultBox(result, view === "drill" && drill?.items[drill.idx] === it);
+            if (box) paintAttempt(box, it.text, it.attempt, () => drillStore.set(drill));
+          } }),
           h("span", { class: "hint-line" }, t("accent.recordHint")))),
       result),
     drillNav());
@@ -242,6 +277,7 @@ function paintAnalysis(box, an) {
 /* ---------- accent check (random paragraph) ---------- */
 
 async function startCheck() {
+  stopCapture(); // the desktop path waits for a new paragraph before repainting
   const mobile = deviceInfo().mobile;
   if (!mobile) unlockAudio();
   stopSpeaking();
@@ -269,7 +305,9 @@ async function startCheck() {
 }
 
 function renderCheck() {
-  const result = h("div", { class: "stack-sm" });
+  stopRecording();
+  const mine = check;
+  const result = h("div", { class: "stack-sm attempt-result" });
   if (check.attempt) paintCheckResult(result);
   fill(root(),
     h("header", { class: "sum-head" },
@@ -283,11 +321,17 @@ function renderCheck() {
         speakBtn(check.text, t("accent.listen"), t("check.listenFirst")),
         speakBtn(check.text, t("speech.slow"), t("speech.slowShort"), 0.75)),
       h("div", { class: "attempt-row" },
-        micButton({ big: true, label: t("check.record"), onText: (heard) => { check.attempt = { heard, report: null }; check.saved = false; paintCheckResult(result); } }),
+        accentMic({ big: true, label: t("check.record"), onText: (heard) => {
+          if (check !== mine) return;
+          check.attempt = { heard, report: null };
+          check.saved = false;
+          const box = resultBox(result, view === "check");
+          if (box) paintCheckResult(box);
+        } }),
         h("span", { class: "hint-line" }, t("check.recordHint"))),
       result),
     h("div", { class: "drill-nav" },
-      h("button", { type: "button", class: "btn", onclick: () => { check.attempt = null; renderCheck(); } }, t("check.again")),
+      h("button", { type: "button", class: "btn", onclick: () => { stopCapture(); check.attempt = null; renderCheck(); } }, t("check.again")),
       h("button", { type: "button", class: "btn primary", onclick: startCheck }, icon("dice"), t("check.newOne"))));
 }
 

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { TOPICS, SCENARIOS, normalizeOptions, filterWords, chooseWords, gradeProgress, readStudyState, saveStudyState,
   meaningChoices, spellingCorrect, answerProgress, isAlternativeSpelling, spellingClue, isAlternativeSaying,
-  sayCorrect, MAX_SPOKEN_RESPONSE_LENGTH } from "../app/js/word-study-core.js";
+  sayCorrect, MAX_SPOKEN_RESPONSE_LENGTH, STUDY_STATE_KEY, mergeProgress } from "../app/js/word-study-core.js";
 
 const words = [
   { id: "ticket", term: "ticket", general: true, exams: ["cet4", "cet6"], topics: ["travel"], scenarios: ["transport"] },
@@ -74,6 +74,49 @@ test("session and review progress survive one atomic storage write without touch
   assert.deepEqual(restored.session.ratings, state.session.ratings);
   assert.equal(restored.progress.ticket.due, state.progress.ticket.due);
   assert.equal(storage.getItem("asound.vocab.v1"), "existing-book");
+});
+
+test("two windows saving in turn keep each other's progress, and the newer review of a word wins", () => {
+  const storage = memory();
+  const a = readStudyState(storage), b = readStudyState(storage); // two windows, each with its own copy in memory
+  b.progress.ticket = gradeProgress(undefined, "good", 2000);
+  assert.equal(saveStudyState(b, storage), true);
+  a.progress.menu = gradeProgress(undefined, "hard", 3000);
+  assert.equal(saveStudyState(a, storage), true);
+  assert.deepEqual(Object.keys(readStudyState(storage).progress).sort(), ["menu", "ticket"], "window A must not erase window B's word");
+  assert.equal(a.progress.ticket.reviewedAt, 2000, "the saving window picks up the other window's progress");
+  a.progress.ticket = gradeProgress(a.progress.ticket, "good", 5000);
+  saveStudyState(a, storage);
+  b.progress.reservation = gradeProgress(undefined, "again", 6000);
+  saveStudyState(b, storage); // B still holds its older review of ticket
+  const stored = readStudyState(storage).progress;
+  assert.equal(stored.ticket.reviewedAt, 5000, "an older copy never replaces a newer review");
+  assert.equal(stored.ticket.seen, 2);
+  assert.deepEqual(Object.keys(stored).sort(), ["menu", "reservation", "ticket"]);
+  assert.equal(b.progress.ticket.reviewedAt, 5000);
+  storage.setItem(STUDY_STATE_KEY, "broken json");
+  assert.equal(saveStudyState(b, storage), true, "unreadable stored data is replaced, not merged");
+  assert.deepEqual(Object.keys(readStudyState(storage).progress).sort(), ["menu", "reservation", "ticket"]);
+  const target = { ticket: { seen: 2, reviewedAt: 9 } };
+  assert.equal(mergeProgress(target, { ticket: { seen: 2, reviewedAt: 9, box: 5 } }), false, "a tie keeps this window's entry");
+  assert.equal(target.ticket.box, undefined);
+  assert.equal(mergeProgress(target, { ticket: { seen: 3, reviewedAt: 1 } }), true, "more reviews win over a later clock");
+});
+
+test("a device clock that moved back never drops a later review in one window", () => {
+  const storage = memory(), state = readStudyState(storage), now = 1_000_000_000_000;
+  state.progress.ticket = gradeProgress(undefined, "good", now + 30 * 86400000); // studied while the clock ran 30 days ahead
+  saveStudyState(state, storage);
+  state.progress.ticket = answerProgress(state.progress.ticket, false, "choice", now);
+  saveStudyState(state, storage);
+  state.progress.ticket = gradeProgress(state.progress.ticket, "again", now + 60000);
+  saveStudyState(state, storage);
+  const stored = readStudyState(storage).progress.ticket;
+  assert.equal(stored.seen, 3);
+  assert.equal(stored.box, 0);
+  assert.equal(stored.answers, 1);
+  assert.equal(stored.due, now + 60000 + 600000, "the word comes back in ten minutes, not in a month");
+  assert.deepEqual(state.progress.ticket, stored);
 });
 
 test("malformed saved data recovers safely and blocked/full storage reports failure", () => {

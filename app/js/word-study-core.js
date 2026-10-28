@@ -7,6 +7,7 @@ const DECKS = new Set(["general", "cet4", "cet6", "kaoyan"]);
 const TOPIC_IDS = new Set(TOPICS.map(v => v.id));
 const SCENARIO_IDS = new Set(SCENARIOS.map(v => v.id));
 const KEY = "asound.wordstudy.v1";
+export const STUDY_STATE_KEY = KEY;
 const DAY = 86400000;
 const INTERVALS = [0, 1, 3, 7, 14, 30];
 export const PRACTICES = ["cards", "choice", "spelling", "say"];
@@ -244,9 +245,31 @@ export function readStudyState(storage) {
   catch { return cleanState(null); }
 }
 
+// Keep the entry with more reviews of each word; reviewedAt only breaks a tie. Every review builds on the merged
+// entry and adds one to seen, so this window's own later review wins even after the device clock moved back.
+// Progress entries are never deleted, so merging cannot bring back removed work. Returns whether target changed.
+export function mergeProgress(target, source) {
+  let changed = false;
+  for (const [id, entry] of Object.entries(source)) {
+    const mine = target[id];
+    if (!mine || entry.seen > mine.seen || (entry.seen === mine.seen && entry.reviewedAt > mine.reviewedAt)) {
+      target[id] = entry;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function saveStudyState(state, storage) {
   try {
-    (storage ?? globalThis.localStorage).setItem(KEY, JSON.stringify({ schemaVersion: 1, ...cleanState(state) }));
+    const store = storage ?? globalThis.localStorage;
+    const next = cleanState(state);
+    // Another window (a second tab, or the installed app beside a browser tab) may have saved newer progress.
+    let stored = null;
+    try { stored = cleanState(JSON.parse(store.getItem(KEY))); } catch { /* nothing readable stored */ }
+    if (stored) mergeProgress(next.progress, stored.progress);
+    store.setItem(KEY, JSON.stringify({ schemaVersion: 1, ...next }));
+    if (object(state) && object(state.progress)) Object.assign(state.progress, next.progress);
     return true;
   } catch { return false; }
 }

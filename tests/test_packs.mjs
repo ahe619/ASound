@@ -13,6 +13,15 @@ const deferred = () => {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 };
+// Safari before 15.4 and Chromium before 100 have neither AbortSignal.throwIfAborted nor AbortSignal.reason.
+async function withoutModernAbortSignal(run) {
+  const proto = AbortSignal.prototype;
+  const saved = ["throwIfAborted", "reason"].map((name) => [name, Object.getOwnPropertyDescriptor(proto, name)]);
+  delete proto.throwIfAborted;
+  Object.defineProperty(proto, "reason", { configurable: true, get: () => undefined });
+  try { return await run(); } finally { for (const [name, descriptor] of saved) Object.defineProperty(proto, name, descriptor); }
+}
+
 async function until(check, message) {
   for (let i = 0; i < 50; i++) {
     if (check()) return;
@@ -85,7 +94,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
     env.partials.set(keyFor(data.packs.find((p) => p.id === id).files[0]), bytes);
   }
   const context = {
-    URL, URLSearchParams, Response, AbortController, performance, setTimeout, clearTimeout,
+    URL, URLSearchParams, Response, AbortController, DOMException, performance, setTimeout, clearTimeout,
     location: { search: "", href: "https://app.test/ASound/" },
     console: { warn: (...args) => env.warnings.push(args) },
     navigator: {
@@ -557,6 +566,29 @@ test("cancelling a runtime fetch aborts it, preserves the weights, and allows a 
   await env.api.install("voice");
   await until(() => env.api.packStatus("voice").state === "installed", "cancelled runtime can be retried");
   assert.equal(env.downloads.length, 1);
+});
+
+test("packs install and cancel on older engines without AbortSignal.throwIfAborted or reason", () => withoutModernAbortSignal(async () => {
+  const download = async (args) => {
+    if (args.signal.aborted) throw new Error("cancelled");
+    await args.cache.put(args.key, new Response(new Uint8Array(args.file.size)));
+    args.onBytes(args.file.size);
+  };
+  const env = await fixture({ release: "test-v1", prefs: { source: "hf" }, download });
+  await env.api.install("voice");
+  await until(() => env.api.packStatus("voice").state === "installed", "the pack must finish on Safari before 15.4");
+  assert.deepEqual(env.runtimeRequests, VOICE_RUNTIME);
+  const waiting = await fixture({ release: "test-v1", controlled: false, prefs: { source: "hf" }, download });
+  await waiting.api.install("voice");
+  await until(() => waiting.swEvents.size === 1, "waiting for the first controller");
+  await waiting.api.cancel("voice");
+  assert.equal(waiting.api.packStatus("voice").state, "partial");
+  assert.equal(waiting.api.packStatus("voice").error, undefined, "a cancel is not reported as a failure");
+  assert.deepEqual(waiting.runtimeRequests, []);
+}));
+
+test("no AbortSignal.throwIfAborted call is left in packs.js", () => {
+  assert.doesNotMatch(source, /\.throwIfAborted\s*\(/);
 });
 
 test("startup repairs old weight-only packs in the serial queue without blocking initialization", async () => {
