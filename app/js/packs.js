@@ -34,10 +34,10 @@ let connectionResults = null;
 let checkingConnections = false;
 export const connectionStatus = () => ({ checking: checkingConnections, results: connectionResults });
 
-export async function initPacks() {
+export async function initPacks({ readOnly = false } = {}) {
   catalog = await fetch("packs.json", { cache: "no-cache" }).then((r) => r.json());
   if (!sourceList().length) throw new Error("No model download source configured");
-  if (prefs.source !== "auto" && !sourceList().includes(prefs.source)) {
+  if (!readOnly && prefs.source !== "auto" && !sourceList().includes(prefs.source)) {
     prefs.source = "auto";
     savePrefs();
   }
@@ -48,7 +48,7 @@ export async function initPacks() {
   }
   gpu = await probeGpu();
   await refresh();
-  if (mode === "web") {
+  if (mode === "web" && !readOnly) {
     const repairIds = Object.keys(status).filter(id => status[id].runtimeMissing);
     const later = window.requestIdleCallback || ((fn) => setTimeout(fn, 3000));
     // Do not await this here: main registers the release worker after startEngines.
@@ -65,13 +65,14 @@ export async function initPacks() {
 // The hosted release caches the speech and language runtimes on first use, not on install (see sw.js), so a
 // pack downloaded but never used online would not work offline. Fetch the runtime of every pack on the device.
 const ONNX = ["ort-wasm-simd-threaded.jsep.mjs", "ort-wasm-simd-threaded.jsep.wasm"].map((f) => "vendor/transformers/" + f);
+const VOICE_ONNX = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"].map((f) => "kokoro/ort-cpu/" + f);
 const TRANSFORMERS = ["vendor/transformers/transformers.min.js", ...ONNX];
 const RUNTIMES = {
   llm: ["vendor/web-llm/index.js"],
   "llm-cpu": ["index.js", "wllama.wasm", "compat/wllama.js", "compat/wllama.wasm"].map((f) => "vendor/wllama/" + f),
   asr: TRANSFORMERS,
   "help-asr": TRANSFORMERS,
-  voice: [...ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"],
+  voice: [...VOICE_ONNX, "kokoro/kokoro.web.js", "kokoro/neural-tts.js", "kokoro/lexicon-us.json"],
 };
 const runtimeRoot = new URL("./", location.href);
 const skipRuntimeRepair = new Set();

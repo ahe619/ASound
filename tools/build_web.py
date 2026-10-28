@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
 DIRECTORIES = {"audio", "css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
-OPTIONAL_ROOT_FILES = {"repair.html"}
+OPTIONAL_ROOT_FILES = {"repair.html", "voice-check.html"}
 LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/",
                  "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'

@@ -32,7 +32,7 @@ MARKER_TEXT = "ASound generated release preparation v1\n"
 DOMAIN = "soundoa.cn"
 REPOSITORY = "ahe619/ASound"
 OWNED_RECEIPTS = {(REPOSITORY, "existing"), ("ahe619/soundoa-site", "planned")}
-ROOT_ASSETS = {"index.html", "repair.html", "manifest.webmanifest", "packs.json", "LICENSES.md", "version.json", "voice-models.json"}
+ROOT_ASSETS = {"index.html", "repair.html", "voice-check.html", "manifest.webmanifest", "packs.json", "LICENSES.md", "version.json", "voice-models.json"}
 EXTENSIONS = {
     "audio": {".wav"},
     "css": {".css"}, "fonts": {".woff2", ".woff", ".ttf", ".txt", ".md"},

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:,">
+  <title>自然语音检查 · ASound</title>
+  <style>
+    :root { color-scheme: light dark; font: 16px/1.55 system-ui, sans-serif; color: #21303c; background: #f3f6f8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+    main { max-width: 660px; margin: 2vh auto; padding: 22px; border: 1px solid #d7e1e8; border-radius: 16px; background: #fff; }
+    h1 { font-size: 1.5rem; margin: 0 0 12px; }
+    p { margin: 12px 0; }
+    .hint, dt { color: #526474; }
+    .sentence { padding: 12px; background: #eff5fa; border-radius: 8px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+    button, a { min-height: 44px; font: inherit; }
+    button { padding: 9px 13px; border-radius: 8px; border: 1px solid #aabac8; color: inherit; background: #fff; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    #start { background: #155f9e; color: #fff; border-color: #155f9e; }
+    button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid #68b6ef; outline-offset: 3px; }
+    a { display: inline-block; padding: 10px 0; color: #155f9e; }
+    dl { display: grid; grid-template-columns: 7em minmax(0, 1fr); gap: 9px; margin: 20px 0; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, monospace; }
+    #status { min-height: 3em; overflow-wrap: anywhere; }
+    @media (max-width: 360px) { main { padding: 16px; } dl { grid-template-columns: 6em minmax(0, 1fr); } }
+    @media (prefers-color-scheme: dark) {
+      :root { background: #121a22; color: #e6edf4; }
+      main { background: #1c2732; border-color: #3b5061; }
+      .hint, dt { color: #b5c5d2; }
+      .sentence, button { background: #293a49; }
+      a { color: #86c7ff; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>自然语音检查</h1>
+    <p class="hint">这不是修复操作。只播放固定练习句，不录音、不上传结果，也不会下载尚未安装的语音包。</p>
+    <p class="sentence" lang="en">I practice English every day.</p>
+    <div class="actions">
+      <button id="start" type="button" disabled>开始检查</button>
+      <button id="cancel" type="button" disabled>取消</button>
+      <button id="replay" type="button" disabled>播放生成的声音</button>
+    </div>
+    <p id="status" role="status" aria-live="polite">正在准备检查页，尚未启动语音模型…</p>
+    <dl>
+      <dt>当前版本</dt><dd id="version">正在读取…</dd>
+      <dt>运行阶段</dt><dd id="phase">尚未开始</dd>
+      <dt>耗时</dt><dd id="elapsed">0 秒</dd>
+      <dt>音频数据</dt><dd id="pcm">尚未生成</dd>
+      <dt>音频输出</dt><dd id="output">尚未调用</dd>
+    </dl>
+    <p class="hint">“正在播放”或音频时钟前进，不代表扬声器一定有声音。请按实际听到的情况记录。</p>
+    <div class="actions">
+      <button id="heard" type="button" disabled>听到了</button>
+      <button id="silent" type="button" disabled>没听到</button>
+      <button id="copy" type="button">复制检查结果</button>
+    </div>
+    <details><summary>检查数据</summary><pre id="report"></pre></details>
+    <a href="./#accent">返回网站</a>
+    <a href="./repair.html" style="margin-left:16px">检查网站更新</a>
+    <div id="runner" hidden></div>
+  </main>
+  <script type="module">
+    const $ = id => document.getElementById(id);
+    const phrase = 'I practice English every day.';
+    // This page diagnoses the downloaded browser voice, without starting a local server engine on import.
+    const here = new URL(location.href);
+    if (!here.searchParams.has('web')) { here.searchParams.set('web', ''); history.replaceState(history.state, '', here); }
+    const root = new URL('./', location.href);
+    let speech, packs, neural, prefs, context, timer, deadline, running = false, token = 0, began = 0;
+    let buffers = [], sources = [], mode = 'speech', ready = false;
+    let data = { diagnostic: 'asound-browser-voice-v1', version: '', browser: navigator.userAgent, webOnly: true,
+      preferences: {}, installed: null, outcome: 'not-started', heard: null, elapsedMs: 0, events: [], buffers: [], outputs: [], audioContext: null };
+    const clean = value => String(value || '').slice(0, 500);
+    const round = value => Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null;
+    const elapsed = () => began ? Math.round(performance.now() - began) : 0;
+    function log(type, fields = {}) {
+      data.events.push({ ms: elapsed(), type, ...fields });
+      if (data.events.length > 160) data.events.shift();
+    }
+    function sample(buffer) {
+      let peak = 0, squares = 0, nonFinite = 0, nonZero = 0;
+      for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+        const pcm = buffer.getChannelData(ch);
+        for (let i = 0; i < pcm.length; i++) {
+          const v = pcm[i];
+          if (!Number.isFinite(v)) { nonFinite++; continue; }
+          peak = Math.max(peak, Math.abs(v)); squares += v * v;
+          if (v !== 0) nonZero++;
+        }
+      }
+      const samples = buffer.length * buffer.numberOfChannels;
+      return { samples, channels: buffer.numberOfChannels, sampleRate: buffer.sampleRate, duration: round(buffer.duration),
+        peak, rms: samples ? Math.sqrt(squares / samples) : 0, finite: nonFinite === 0, nonFinite, nonZero };
+    }
+    function remember(buffer) {
+      let entry = buffers.find(item => item.buffer === buffer);
+      if (!entry && buffer && buffers.length < 8) {
+        entry = { id: buffers.length + 1, buffer, createdMs: elapsed() }; buffers.push(entry);
+      }
+      return entry;
+    }
+    function observeAudio(a) {
+      if (a.__asoundVoiceCheck) return;
+      Object.defineProperty(a, '__asoundVoiceCheck', { value: true });
+      const create = a.createBuffer.bind(a), source = a.createBufferSource.bind(a), resume = a.resume.bind(a);
+      a.createBuffer = (...args) => { const buffer = create(...args); if (running) remember(buffer); return buffer; };
+      a.resume = (...args) => {
+        const mine = token;
+        if (running) log('resume-request', { state: a.state, clock: round(a.currentTime) });
+        return resume(...args).then(value => {
+          if (mine === token && running) log('resume-resolved', { state: a.state, clock: round(a.currentTime) });
+          return value;
+        }, error => {
+          if (mine === token && running) log('resume-error', { error: clean(error.message), state: a.state });
+          throw error;
+        });
+      };
+      a.createBufferSource = (...args) => {
+        const node = source(...args);
+        if (!running) return node;
+        const mine = token, kind = mode;
+        const record = { mode: kind, createdMs: elapsed(), startCalled: false, startSucceeded: false, ended: false, connectedToDestination: false };
+        data.outputs.push(record); sources.push(node);
+        const connect = node.connect.bind(node), start = node.start.bind(node);
+        node.connect = (...args) => { const result = connect(...args); if (args[0] === a.destination) record.connectedToDestination = true; return result; };
+        node.start = (...args) => {
+          const entry = remember(node.buffer);
+          record.bufferId = entry?.id || null; record.startCalled = true; record.startMs = elapsed();
+          record.scheduledClock = round(args[0] || 0); record.contextState = a.state; record.startClock = round(a.currentTime);
+          if (node.buffer) record.pcmAtStart = sample(node.buffer);
+          try { const result = start(...args); record.startSucceeded = true; log('source-start', { mode: kind, bufferId: record.bufferId, state: a.state }); return result; }
+          catch (error) { record.error = clean(error.message); throw error; }
+        };
+        node.addEventListener('ended', () => {
+          if (mine !== token) return;
+          record.ended = true; record.endMs = elapsed(); record.endClock = round(a.currentTime);
+          log('source-ended', { mode: kind, clock: record.endClock }); paint();
+        });
+        return node;
+      };
+      a.addEventListener('statechange', () => { if (running) log('context-state', { state: a.state, clock: round(a.currentTime) }); });
+    }
+    function usable() {
+      return buffers.filter(item => { const s = sample(item.buffer); return s.finite && s.samples > 0 && s.peak > 0; });
+    }
+    function paint() {
+      if (running) data.elapsedMs = elapsed();
+      data.buffers = buffers.map(item => ({ id: item.id, createdMs: item.createdMs, measuredMs: elapsed(), ...sample(item.buffer) }));
+      if (context) data.audioContext = { state: context.state, sampleRate: context.sampleRate, currentTime: round(context.currentTime),
+        initialTime: data.audioContext?.initialTime ?? round(context.currentTime), baseLatency: round(context.baseLatency), outputLatency: round(context.outputLatency) };
+      if (data.audioContext) data.audioContext.clockAdvanced = round(data.audioContext.currentTime - data.audioContext.initialTime);
+      $('elapsed').textContent = (data.elapsedMs / 1000).toFixed(1) + ' 秒';
+      $('pcm').textContent = data.buffers.length ? data.buffers.map(b => `${b.samples} 个采样，峰值 ${b.peak.toPrecision(4)}，${b.finite ? '数值有效' : '含无效数值'}`).join('；') : '尚未生成';
+      const started = data.outputs.filter(output => output.startSucceeded).length;
+      $('output').textContent = context ? `${context.state}；时钟 ${data.audioContext.currentTime} 秒；已调用输出 ${started} 次` : '尚未调用';
+      $('start').disabled = !ready || running; $('cancel').disabled = !running;
+      $('replay').disabled = running || !usable().length;
+      $('heard').disabled = $('silent').disabled = data.outcome === 'not-started';
+      $('report').textContent = JSON.stringify(data, null, 2);
+    }
+    function finish(outcome, text) {
+      if (!running) return;
+      data.elapsedMs = elapsed(); data.outcome = outcome; running = false;
+      clearInterval(timer); clearTimeout(deadline); $('status').textContent = text; paint();
+    }
+    function cancel(outcome = 'cancelled') {
+      if (!running) return;
+      log(outcome); finish(outcome, outcome === 'timeout' ? '检查已超时。可以复制结果或重新检查。' : '已取消。检查结果仍可复制。');
+      token++; speech?.stopSpeaking(); neural?.dispose();
+      for (const node of sources) { try { node.stop(); } catch {} }
+      paint();
+    }
+    function begin(kind) {
+      running = true; mode = kind; token++;
+      if (kind === 'speech') began = performance.now();
+      data.elapsedMs = elapsed(); data.outcome = 'running'; data.heard = null;
+      if (kind === 'speech') {
+        buffers = []; sources = []; data.events = []; data.outputs = []; data.buffers = []; data.audioContext = null;
+        data.speech = null; data.neural = null; data.error = ''; data.installed = null;
+      }
+      timer = setInterval(paint, 500);
+      deadline = setTimeout(() => cancel('timeout'), kind === 'speech' ? 180000 : 30000);
+      paint(); return token;
+    }
+    $('start').addEventListener('click', async () => {
+      if (!ready || running) return;
+      const mine = begin('speech'); $('phase').textContent = '准备检查'; $('status').textContent = '正在读取已下载语音包…';
+      data.preferences = { voiceEngine: clean(prefs.voiceEngine), voice: clean(prefs.voice), rate: Number(prefs.rate) };
+      try {
+        // This is synchronous in the real user gesture, using the same context as speakBtn.
+        context = speech.audioContext();
+        if (!context) throw new Error('此浏览器没有可用的音频输出接口。');
+        observeAudio(context); speech.unlockAudio(); paint();
+        await packs.initPacks({ readOnly: true });
+        if (mine !== token || !running) return;
+        const installed = packs.packStatus('voice');
+        data.installed = { state: installed.state, done: installed.done, total: installed.total,
+          runtimeMissing: !!installed.runtimeMissing, error: clean(installed.error) };
+        if (installed.state !== 'installed') {
+          finish('not-ready', installed.runtimeMissing ? '语音包已在设备上，但运行组件未齐。请返回网站完成更新后再检查。' : '尚无完整的已下载语音包。请返回网站下载完成后再检查。'); return;
+        }
+        const cfg = await packs.engineConfig('voice');
+        if (mine !== token || !running) return;
+        if (!cfg || cfg.mode !== 'web') throw new Error('当前不是网页语音配置，未启动检查。');
+        speech.configureVoice(cfg);
+        const button = speech.speakBtn(phrase, '检查固定练习句');
+        $('runner').replaceChildren(button); log('speak-button-click'); button.click();
+      } catch (error) {
+        if (mine !== token || !running) return;
+        data.error = clean(error.message); finish('error', '检查未完成：' + data.error);
+      }
+    });
+    $('cancel').addEventListener('click', () => cancel());
+    $('replay').addEventListener('click', async () => {
+      if (running) return;
+      const saved = usable(); if (!saved.length) return;
+      const mine = begin('replay'); $('phase').textContent = '再次播放'; $('status').textContent = '复用已生成的声音，不重新合成。';
+      try {
+        // resume() is invoked inside this separate user gesture before awaiting anything.
+        await context.resume();
+        if (mine !== token || !running) return;
+        if (context.state !== 'running') throw new Error('浏览器仍未允许音频输出。');
+        let at = context.currentTime + .03;
+        saved.forEach((entry, index) => {
+          const node = context.createBufferSource(); node.buffer = entry.buffer; node.connect(context.destination);
+          if (index === saved.length - 1) node.addEventListener('ended', () => {
+            if (mine === token) finish('replay-ended', '播放调用已结束。请按实际情况选择“听到了”或“没听到”。');
+          });
+          node.start(at); at += entry.buffer.duration;
+        });
+      } catch (error) { if (mine === token && running) { data.error = clean(error.message); finish('error', data.error); } }
+    });
+    for (const [id, heard] of [['heard', true], ['silent', false]]) $(id).addEventListener('click', () => {
+      data.heard = heard; log('heard', { heard, mode }); $('status').textContent = heard ? '已记录：听到了声音。' : '已记录：没有听到声音。请复制检查结果。'; paint();
+    });
+    $('copy').addEventListener('click', async () => {
+      paint(); const text = JSON.stringify(data, null, 2);
+      try { await navigator.clipboard.writeText(text); $('copy').textContent = '已复制'; }
+      catch {
+        let field = $('copy-result');
+        if (!field) { field = document.createElement('textarea'); field.id = 'copy-result'; field.readOnly = true; field.setAttribute('aria-label', '检查结果'); field.style.cssText = 'width:100%;min-height:180px;font-size:16px'; $('copy').after(field); }
+        field.value = text; field.select(); $('copy').textContent = '请复制下方检查结果';
+      }
+    });
+    document.addEventListener('asound:speech-end', () => {
+      if (!running || mode !== 'speech') return;
+      const error = speech.speechStatus().error;
+      finish(error ? 'speech-error' : 'speech-ended', error ? '朗读结束：' + clean(error) : '播放调用已结束。请按实际情况选择“听到了”或“没听到”。');
+    });
+    window.addEventListener('pagehide', () => { cancel(); speech?.stopSpeaking(); neural?.dispose(); });
+    async function releaseVersion() {
+      try {
+        const worker = navigator.serviceWorker?.controller;
+        if (worker) {
+          data.version = await new Promise((resolve, reject) => {
+            const channel = new MessageChannel();
+            const timer = setTimeout(() => { channel.port1.close(); reject(new Error('version timeout')); }, 3000);
+            channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); resolve(clean(event.data?.version)); };
+            worker.postMessage({ type: 'ASOUND_VERSION' }, [channel.port2]);
+          });
+        } else {
+          const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 5000);
+          try { const response = await fetch(new URL('version.json', root), { cache: 'no-store', signal: controller.signal }); if (response.ok) data.version = clean((await response.json()).version); }
+          finally { clearTimeout(timeout); }
+        }
+      } catch {}
+      $('version').textContent = data.version || '暂时无法读取'; paint();
+    }
+    await releaseVersion();
+    const release = /^(\d+)\.(\d+)\.(\d+)(?:-|$)/.exec(data.version);
+    const recent = release && (Number(release[1]) > 0 || Number(release[2]) > 3 || (Number(release[2]) === 3 && Number(release[3]) >= 5));
+    if (!recent) {
+      data.outcome = 'update-required';
+      data.error = data.version ? '当前仍运行旧版本，请先更新。' : '无法确认当前网站版本，请先检查更新。';
+      $('status').textContent = data.error + ' 打开下方“检查网站更新”，更新至 0.3.5 或更新版本后再回来检查。';
+      paint();
+    } else try {
+      [speech, packs, neural, { prefs }] = await Promise.all([import('./js/speech.js'), import('./js/packs.js'), import('./kokoro/neural-tts.js'), import('./js/state.js')]);
+      speech.onSpeechStatus(state => {
+        if (!running) return;
+        const next = { phase: state.phase, engine: state.engine, browser: state.browser, error: clean(state.error) };
+        if (JSON.stringify(next) !== JSON.stringify(data.speech)) log('speech', next);
+        data.speech = next;
+        $('phase').textContent = ({ preparing: '准备朗读', loading: '加载语音引擎', generating: '生成声音', playing: '正在输出音频', idle: '已结束', error: '朗读失败' })[state.phase] || state.phase;
+        if (state.phase === 'playing') $('status').textContent = state.engine === 'system' ? '已转为系统语音，页面无法读取它的音频采样。请按实际听到的情况记录。' : '已调用音频输出，请确认是否听见。';
+        paint();
+      });
+      neural.onStatus(state => {
+        if (!running) return;
+        const next = { state: state.state, engine: state.engine, error: clean(state.error), initMs: state.initMs, generationMs: state.generationMs, generating: state.generating };
+        if (JSON.stringify(next) !== JSON.stringify(data.neural)) log('neural', next);
+        data.neural = next; paint();
+      });
+      ready = true; $('status').textContent = '点击“开始检查”后才会启动已下载的语音引擎。'; paint();
+    } catch (error) { data.error = clean(error.message); $('status').textContent = '检查页准备失败：' + data.error; paint(); }
+  </script>
+</body>
+</html>

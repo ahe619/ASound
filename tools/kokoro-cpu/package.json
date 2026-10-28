@@ -1,0 +1,25 @@
+{
+  "name": "asound-kokoro-cpu-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "kokoro-js": "1.2.1",
+    "@huggingface/transformers": "3.5.1",
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
+    "phonemizer": "1.2.1"
+  },
+  "devDependencies": {
+    "rollup": "4.40.2",
+    "@rollup/plugin-node-resolve": "16.0.1",
+    "@rollup/plugin-terser": "0.4.4",
+    "@rollup/plugin-alias": "5.1.1"
+  },
+  "overrides": {
+    "@huggingface/transformers": "3.5.1",
+    "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
+    "phonemizer": "1.2.1"
+  }
+}
