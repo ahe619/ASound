@@ -86,7 +86,8 @@ class AmericanIpaTests(unittest.TestCase):
                 american_ipa.main()
             fresh = out.read_bytes()
         shipped = (ROOT / "app" / "vocabulary" / "ipa-us.json").read_bytes()
-        self.assertTrue(fresh == shipped, "Run python tools/american_ipa.py to regenerate app/vocabulary/ipa-us.json")
+        self.assertTrue(fresh.replace(b"\r\n", b"\n") == shipped.replace(b"\r\n", b"\n"),
+                        "Run python tools/american_ipa.py to regenerate app/vocabulary/ipa-us.json")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import { checks, drillStore } from "./store.js";
 import { saveBtn, fmtDate, levelName } from "./widgets.js";
 import { modeCards } from "./modes.js";
 import { DRILL_BANK } from "./drill-bank.js";
+import { deviceInfo } from "./device.js";
 
 let view = "home";        // home | drill | check
 let drill = null;         // {drillId, level, items, idx}
@@ -72,11 +73,12 @@ function bankItems(d, count, skip = new Set()) {
 }
 
 function startDrill() {
-  unlockAudio();
+  const mobile = deviceInfo().mobile;
+  if (!mobile) unlockAudio();
   stopSpeaking();
   const d = drillById(prefs.drill), level = prefs.level;
   if (drillCtl) drillCtl.abort();
-  const items = bankItems(d, 3);
+  const items = bankItems(d, mobile ? 5 : 3);
   if (!items.length) { toast(aiErrorText({ code: "invalid_json" })); renderHome(); return; }
   const mine = { drillId: d.id, level, items, idx: 0 };
   drill = mine;
@@ -84,6 +86,7 @@ function startDrill() {
   view = "drill";
   renderDrill();
   scrollTop();
+  if (mobile) return;
   const ctl = new AbortController();
   drillCtl = ctl;
   askJSON(P.drillPrompt(d, level), { cache: false, signal: ctl.signal }).then((raw) => {
@@ -142,7 +145,7 @@ function moveDrill(step) {
 
 function renderDrill() {
   const d = drillById(drill.drillId), it = drill.items[drill.idx];
-  prefetchSpeech(it.text); // "Listen" is the first thing a learner taps on a drill sentence
+  if (!deviceInfo().mobile) prefetchSpeech(it.text); // Mobile voices start only when Listen is tapped.
   const result = h("div", { class: "stack-sm" });
   if (it.attempt) paintAttempt(result, it.text, it.attempt, () => drillStore.set(drill));
   const ipaLine = it.ipa ? h("p", { class: "ipa-line", hidden: !prefs.showIpa }, fmtIpa(it.ipa)) : null;
@@ -205,6 +208,12 @@ function paintAttempt(box, target, attempt, persist) {
 }
 
 async function analyze(box, target, attempt, persist) {
+  if (deviceInfo().mobile) {
+    attempt.analysis = { points: [], encourage: t("check.fallback") };
+    persist && persist();
+    paintAnalysis(box, attempt.analysis);
+    return;
+  }
   fill(box, h("p", { class: "hint-line" }, t("accent.analyzing"), thinkingDots()));
   // The model runs one request at a time: the learner is waiting on this, not on extra drill sentences.
   if (drillCtl) drillCtl.abort("yield");
@@ -233,9 +242,18 @@ function paintAnalysis(box, an) {
 /* ---------- accent check (random paragraph) ---------- */
 
 async function startCheck() {
-  unlockAudio();
+  const mobile = deviceInfo().mobile;
+  if (!mobile) unlockAudio();
   stopSpeaking();
   const topic = pick(TOPICS);
+  if (mobile) {
+    const other = PASSAGES.filter(text => text !== check?.text);
+    check = { topic, text: pick(other.length ? other : PASSAGES), meaning: "", attempt: null, saved: false };
+    view = "check";
+    renderCheck();
+    scrollTop();
+    return;
+  }
   fill(root(), h("div", { class: "loading-card" }, h("p", null, t("check.rolling", { topic }), thinkingDots())));
   scrollTop();
   let text = "", meaning = "";
@@ -309,6 +327,11 @@ function guessDrills(missed) {
 
 async function requestReport(box, missed) {
   const a = check.attempt;
+  if (deviceInfo().mobile) {
+    a.report = { summary: t("check.fallback"), problems: [], drills: guessDrills(missed), encourage: "" };
+    paintReport(box, a.report);
+    return;
+  }
   fill(box, h("p", { class: "hint-line" }, t("check.diagnosing"), thinkingDots()));
   try {
     const o = await askJSON(P.assessPrompt(check.text, a.heard, missed));
