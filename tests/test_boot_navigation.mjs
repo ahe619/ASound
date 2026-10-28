@@ -15,6 +15,7 @@ async function fixture(hash = "") {
   const history = { state: null };
   const context = {
     state, history, prefs: { uiLang: "en" }, URLSearchParams,
+    TABS: ["talk", "accent", "vocab", "models", "me"],
     location: { protocol: "https:", hash, search: "" }, navigator: { userAgent: "Test browser" },
     window: { addEventListener: noop, requestIdleCallback: noop },
     document: { body: { append: value => calls.errors.push(value) } },
