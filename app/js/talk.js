@@ -12,7 +12,7 @@ import { speak, speakBtn, stopSpeaking, unlockAudio, isSpeaking } from "./speech
 import { micButton, micSupported, handsFree } from "./mic.js";
 import { vocab, sessions, profile, placements, live, rehearsals } from "./store.js";
 import { setTalkView, currentRoute, registerViewCleanup } from "./nav.js";
-import { saveBtn, confirmInline, fmtDate, levelName, voiceRecommendCard } from "./widgets.js";
+import { saveBtn, confirmInline, fmtDate, levelName, voiceRecommendCard, disclosure } from "./widgets.js";
 import { modeCards } from "./modes.js";
 
 const MAX_TURNS = 40;
@@ -37,20 +37,25 @@ export function renderTalkHome() {
   fill($("#talk-home"),
     resumeCard(saved),
     debriefCard(),
-    h("section", { class: "stack-xs" }, h("h1", { class: "title" }, t("talk.title")), h("p", { class: "lede" }, t("talk.lede"))),
-    h("div", { class: "stack-sm" }, scenarioGrid(), scenarioExtras()),
-    h("div", { class: "start-row" }, levelPicker(), h("button", { type: "button", class: "btn primary big", id: "start-btn", onclick: startTalk }, t("talk.start"))),
+    h("section", { class: "page-intro" }, h("h1", { class: "title" }, t("talk.title")), h("p", { class: "lede" }, t("ui.talkIntro"))),
+    h("section", { class: "card practice-launch" },
+      h("div", { class: "stack-xs" }, h("span", { class: "eyebrow" }, t("ui.currentScene")),
+        h("h2", { class: "launch-title" }, t(`scen.${prefs.scenario}.name`))),
+      scenarioExtras(),
+      h("button", { type: "button", class: "btn primary big", id: "start-btn", onclick: startTalk }, t("talk.start"))),
+    disclosure("talk-scenes", t("talk.scenarios"), scenarioGrid(), { note: t(`scen.${prefs.scenario}.name`) }),
+    disclosure("talk-level", t("talk.levelLabel"), levelPicker(), { note: levelName(prefs.level) }),
     modeCards("talk"),
-    h("section", { class: "stack-sm" }, h("h2", { class: "sec" }, t("talk.sampleTitle")), sampleCard()),
-    h("section", { class: "stack-sm" }, h("h2", { class: "sec" }, t("talk.historyTitle")), historyList()),
+    disclosure("talk-sample", t("talk.sampleTitle"), sampleCard()),
+    disclosure("talk-history", t("talk.historyTitle"), historyList()),
   );
 }
 
 function scenarioGrid() {
   const zh = getLanguage() !== "en"; // show the localized name under the English one
   return h("div", { class: "grid", role: "group", "aria-label": t("talk.scenarios") }, SCENARIOS.map((sc) => h("button", {
-    type: "button", class: "opt", "aria-pressed": String(prefs.scenario === sc.id),
-    onclick: () => { prefs.scenario = sc.id; savePrefs(); renderTalkHome(); },
+    type: "button", id: `scene-${sc.id}`, class: "opt", "aria-pressed": String(prefs.scenario === sc.id),
+    onclick: () => { prefs.scenario = sc.id; savePrefs(); renderTalkHome(); $(`#scene-${sc.id}`)?.focus({ preventScroll: true }); },
   },
   h("span", { class: "opt-en", lang: "en" }, t(`scen.${sc.id}.en`)),
   zh ? h("span", { class: "opt-zh" }, t(`scen.${sc.id}.name`)) : null,
@@ -214,7 +219,12 @@ function usedChips(hits) {
 function levelPicker() {
   const seg = h("div", { class: "seg", role: "group", "aria-labelledby": "level-label" }, LEVELS.map((l) => h("button", {
     type: "button", "data-id": l.id, "aria-pressed": String(prefs.level === l.id), title: t(`level.${l.id}.desc`),
-    onclick: () => { prefs.level = l.id; savePrefs(); for (const b of seg.children) b.setAttribute("aria-pressed", String(Number(b.dataset.id) === l.id)); },
+    onclick: () => {
+      prefs.level = l.id; savePrefs();
+      for (const b of seg.children) b.setAttribute("aria-pressed", String(Number(b.dataset.id) === l.id));
+      const note = document.querySelector("#talk-level .ui-disclosure-note");
+      if (note) note.textContent = levelName(l.id);
+    },
   }, String(l.id), h("small", null, t(`level.${l.id}.name`)))));
   return h("div", { class: "stack-xs" }, h("span", { class: "field-label", id: "level-label" }, t("talk.levelLabel")), seg);
 }

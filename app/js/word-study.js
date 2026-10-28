@@ -3,6 +3,7 @@ import { h, fill, icon, fmtIpa, str, toast } from "./util.js";
 import { t, addStrings, getLanguage } from "./i18n.js";
 import { speakBtn, stopSpeaking, speak, audioContext, prefetchSpeech } from "./speech.js";
 import { micButton, cancelMicButton } from "./mic.js";
+import { disclosure } from "./widgets.js";
 import { vocab } from "./store.js";
 import { createWordIllustration, warmPictures, preparePictures, hasPicture } from "./word-illustrations.js";
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
@@ -359,33 +360,32 @@ function setupView() {
     h("strong", null, t(`wstudy.deck.${id}`)), h("span", null, t("wstudy.wordCount", { n: count })));
   }));
   return [
-    h("header", { class: "ws-intro" }, h("div", null,
-      h("p", { class: "eyebrow" }, t("wstudy.eyebrow")),
-      h("h1", { class: "title" }, t("wstudy.title")),
-      h("p", { class: "lede" }, t("wstudy.intro"))), h("span", { class: "ws-mark", "aria-hidden": "true" }, "Aa")),
+    h("header", { class: "ws-intro page-intro" }, h("div", null,
+      h("h1", { class: "title" }, t("vocab.section.study")),
+      h("p", { class: "lede" }, t("ui.studyIntro")))),
     resumeDiscarded ? h("p", { class: "note-card", role: "status" }, t("wstudy.resumeDiscarded")) : null,
     remaining ? h("div", { class: "resume" }, h("p", { class: "resume-text" }, t("wstudy.resumeNote", { done: saved.session.index, total: saved.session.ids.length })),
       h("button", { type: "button", class: "btn primary", onclick: action(openPractice) }, t("wstudy.resume"))) : null,
     h("section", { class: "stack-sm", "aria-label": t("wstudy.chooseDeck") },
       h("h2", { class: "sec" }, t("wstudy.chooseDeck")), deckCards,
       options.deck !== "general" ? h("p", { class: "hint-line ws-deck-note" }, deckNote || t("wstudy.examNote")) : null),
-    h("section", { class: "card ws-filters" },
-      h("div", { class: "ws-filter-title" }, h("h2", { class: "sec" }, t("wstudy.filterTitle")), h("span", { class: "pill" }, t("wstudy.optional"))),
-      h("p", { class: "hint-line" }, t("wstudy.filterHint")),
-      choices(t("wstudy.topicLabel"), TOPICS, options.topic, (value, id) => updateOption("topic", value, id), "ws-topic", true),
-      choices(t("wstudy.scenarioLabel"), SCENARIOS, options.scenario, (value, id) => updateOption("scenario", value, id), "ws-scenario", true),
-      h("p", { class: "ws-filter-result", role: "status", "aria-live": "polite" }, pool.length ? t("wstudy.matching", { n: pool.length }) : t("wstudy.noMatch"))),
     h("div", { class: "ws-start card" },
       choices(t("wstudy.practiceLabel"), PRACTICES.map(id => ({ id, key: `wstudy.practice.${id}` })), options.practice,
         (value, id) => updateOption("practice", value, id), "ws-practice"),
       h("p", { class: "hint-line" }, t(`wstudy.practiceHint.${options.practice}`)),
-      choices(t("wstudy.batchSize"), [10, 20, 30].map(size => ({ id: String(size), key: `wstudy.size.${size}` })), String(options.size),
-        (value, id) => updateOption("size", Number(value), id), "ws-size"),
+      disclosure("study-options", t("ui.studyOptions"), [
+        h("p", { class: "hint-line" }, t("wstudy.filterHint")),
+        choices(t("wstudy.topicLabel"), TOPICS, options.topic, (value, id) => updateOption("topic", value, id), "ws-topic", true),
+        choices(t("wstudy.scenarioLabel"), SCENARIOS, options.scenario, (value, id) => updateOption("scenario", value, id), "ws-scenario", true),
+        choices(t("wstudy.batchSize"), [10, 20, 30].map(size => ({ id: String(size), key: `wstudy.size.${size}` })), String(options.size),
+          (value, id) => updateOption("size", Number(value), id), "ws-size"),
+        h("p", { class: "ws-filter-result", role: "status", "aria-live": "polite" }, pool.length ? t("wstudy.matching", { n: pool.length }) : t("wstudy.noMatch"))
+      ], { note: `${[options.topic ? t(`wstudy.topic.${options.topic}`) : "", options.scenario ? t(`wstudy.scenario.${options.scenario}`) : ""].filter(Boolean).join(" / ") || t("ui.randomWords")} · ${t(`wstudy.size.${options.size}`)}` }),
       h("p", { class: "hint-line" }, t("wstudy.stats", { learned, due })),
       h("div", { class: "ws-start-actions" },
         h("button", { type: "button", class: "btn primary big", disabled: !pool.length, onclick: action(() => begin("random")) }, icon("dice"), t("wstudy.start")),
         h("button", { type: "button", class: "btn big", disabled: !due, onclick: action(() => begin("review")) }, t("wstudy.review", { n: due }))),
-      h("p", { class: "hint-line" }, t("wstudy.modelNote"))),
+      !pool.length ? h("p", { class: "hint-line" }, t("wstudy.noMatch")) : null),
     sourceDetails(options.deck),
   ];
 }

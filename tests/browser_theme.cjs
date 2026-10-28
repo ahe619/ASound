@@ -64,6 +64,7 @@ const server = http.createServer((req, res) => {
     }
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#settings-open').click();
+    await page.locator('#settings-learning > summary').click();
     await page.locator('#settings-panel select').first().waitFor();
     const form = await page.locator('#settings-panel select').first().evaluate(el => ({
       color: getComputedStyle(el).color, background: getComputedStyle(el).backgroundColor,

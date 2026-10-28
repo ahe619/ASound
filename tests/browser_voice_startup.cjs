@@ -40,7 +40,8 @@ export const onStatus=fn=>{listener=fn};export const synthesize=(text,{signal}={
    (await import('./js/speech.js')).configureVoice({mode:'web',base:origin+'/',canon:origin+'/',cache:'test-voices'});
   });
   await page.click('#settings-open');
-  await page.locator('#voice-options details').filter({has:page.locator('.voice-grid')}).locator('summary').click();
+  await page.locator('#settings-voice > summary').click();
+  await page.locator('#settings-voice-library > summary').click();
   assert.equal(await page.locator('.voice-grid .speak').count(),16);
   for(let i=0;i<16;i++){
    await page.locator('.voice-grid .speak').nth(i).click();

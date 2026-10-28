@@ -9,7 +9,7 @@ import { readingMatch } from "./diff.js";
 import { speakBtn, stopSpeaking, unlockAudio, prefetchSpeech } from "./speech.js";
 import { micButton, cancelMicButton } from "./mic.js";
 import { checks, drillStore } from "./store.js";
-import { saveBtn, fmtDate, levelName } from "./widgets.js";
+import { saveBtn, fmtDate, levelName, disclosure } from "./widgets.js";
 import { modeCards } from "./modes.js";
 import { DRILL_BANK } from "./drill-bank.js";
 import { deviceInfo } from "./device.js";
@@ -66,13 +66,13 @@ function renderHome() {
   view = "home";
   const zh = getLanguage() !== "en"; // show the localized name under the English one
   const grid = h("div", { class: "grid", role: "group", "aria-label": t("accent.drills") }, DRILLS.map((d) => h("button", {
-    type: "button", class: "opt", "aria-pressed": String(prefs.drill === d.id),
-    onclick: () => { prefs.drill = d.id; savePrefs(); renderHome(); },
+    type: "button", id: `drill-${d.id}`, class: "opt", "aria-pressed": String(prefs.drill === d.id),
+    onclick: () => { prefs.drill = d.id; savePrefs(); renderHome(); document.getElementById(`drill-${d.id}`)?.focus({ preventScroll: true }); },
   }, h("span", { class: "opt-en", lang: "en" }, t(`drill.${d.id}.en`)), zh ? h("span", { class: "opt-zh" }, t(`drill.${d.id}.name`)) : null, h("span", { class: "opt-desc" }, t(`drill.${d.id}.desc`)))));
   const history = checks.all().slice(0, 12).reverse();
   fill(root(),
-    h("section", { class: "stack-xs" }, h("h1", { class: "title" }, t("accent.title")), h("p", { class: "lede" }, t("accent.lede"))),
-    h("div", { class: "card" },
+    h("section", { class: "page-intro" }, h("h1", { class: "title" }, t("accent.title")), h("p", { class: "lede" }, t("ui.accentIntro"))),
+    h("div", { class: "card practice-launch" },
       h("h2", { class: "sec" }, icon("dice"), t("check.title")),
       h("p", { class: "lede" }, t("check.lede")),
       history.length ? h("div", { class: "stack-xs" },
@@ -80,14 +80,14 @@ function renderHome() {
         h("div", { class: "trend", "aria-label": t("check.trend") }, history.map((c) => { const bar = h("i", { title: `${fmtDate(c.at)} \u00b7 ${c.score}%` }); bar.style.height = `${Math.max(4, c.score)}%`; return bar; })),
         h("span", { class: "hint-line" }, t("check.last", { score: history[history.length - 1].score }))) : null,
       h("div", { class: "row" }, h("button", { type: "button", class: "btn hot big", id: "check-start", onclick: startCheck }, icon("dice"), t("check.roll")))),
-    h("section", { class: "stack-sm" },
-      h("h2", { class: "sec" }, t("accent.drills")),
+    disclosure("accent-topics", t("accent.drills"), [
       grid,
       h("div", { class: "start-row" },
         h("p", { class: "lede" }, t("accent.levelNote", { level: levelName(prefs.level) })),
-        h("button", { type: "button", class: "btn primary big", id: "drill-start", onclick: startDrill }, t("accent.start")))),
+        h("button", { type: "button", class: "btn primary big", id: "drill-start", onclick: startDrill }, t("accent.start")))],
+      { note: t(`drill.${prefs.drill}.name`) }),
     modeCards("accent"),
-    h("p", { class: "note-card" }, t("accent.howNote")));
+    disclosure("accent-guide", t("ui.practiceGuide"), h("p", { class: "hint-line" }, t("accent.howNote"))));
 }
 
 /* ---------- drills ---------- */

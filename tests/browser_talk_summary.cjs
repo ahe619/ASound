@@ -83,7 +83,7 @@ const summary = { overall:'A useful practice session.', strengths:[],focus:[],ex
    assert.equal(archived.fixes,1);assert.equal(archived.turns[1].fb.corrected,'I went home.');
    assert.equal(JSON.stringify(archived).includes('_fbP'),false);
    assert.match(await page.locator('#summary').innerText(),/A useful practice session/);
-   await page.locator('#summary .sum-head button').click();await page.locator('#talk-home .hist').click();
+   await page.locator('#summary .sum-head button').click();await page.locator('#talk-history > summary').click();await page.locator('#talk-home .hist').click();
    await page.locator('#view-summary:not([hidden])').waitFor();
    assert.match(await page.locator('#summary').innerText(),/A useful practice session/);
    assert.equal((await f.state()).requests,3,'opening an archived summary does not re-run inference');

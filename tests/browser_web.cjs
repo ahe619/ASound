@@ -75,7 +75,7 @@ const server = http.createServer((req, res) => {
 
     await context.setOffline(true);
     await page.reload();
-    await page.waitForFunction(() => document.querySelector('#models')?.children.length > 0);
+    await page.locator('#start-btn').waitFor();
     await page.waitForFunction(async (version) => (await import('./js/updates.js')).updateStatus().version === version, first);
     assert.equal((await status()).version, first, 'offline release must boot');
     await context.setOffline(false);
@@ -96,6 +96,7 @@ const server = http.createServer((req, res) => {
     assert.equal((await apply()).reason, 'practice', 'do not replace an active exercise');
     await page.locator('#tab-talk').click();
     await page.locator('#settings-open').click();
+    await page.locator('#settings-app > summary').click();
     await Promise.all([
       page.waitForEvent('domcontentloaded'),
       page.locator('#app-updates button').last().click(),
@@ -114,7 +115,7 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.evaluate(async () => (await fetch('version.json').then((r) => r.json())).version), second);
     await context.setOffline(true);
     await page.reload();
-    await page.waitForFunction(() => document.querySelector('#models')?.children.length > 0);
+    await page.locator('#start-btn').waitFor();
     await page.waitForFunction(async (version) => (await import('./js/updates.js')).updateStatus().version === version, second);
     assert.equal((await status()).version, second, 'old release still boots offline after failed update');
     assert.deepEqual(errors, [], 'unexpected browser errors');

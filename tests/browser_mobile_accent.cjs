@@ -5,6 +5,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
+async function openDrill(page) {
+ const section = page.locator('#accent-topics');
+ if (!await section.evaluate(el => el.open)) await section.locator('summary').click();
+ await page.click('#drill-start');
+}
 const app = path.resolve(__dirname, '../app'), origin = 'https://accent.test';
 const correctionText = 'Yesterday I walked through a quiet park with my friends and watched the birds beside the river. We talked about our weekend plans and decided to visit the library together after lunch.';
 const cpu = `export class Wllama {
@@ -113,7 +118,7 @@ const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>tru
    await f.record();assert.match(await page.locator('#accent').innerText(),/练一练没被识别出来的词/);
    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('asound.drill.v1')).items[0].attempt.analysis.points),[]);
    await f.idleModels();
-   await page.locator('#accent .sum-head .back').click();await page.click('#drill-start');await page.locator('#accent .drill-text:not(.para)').waitFor();
+   await page.locator('#accent .sum-head .back').click();await openDrill(page);await page.locator('#accent .drill-text:not(.para)').waitFor();
    assert.equal(await page.locator('#accent .speak').count(),2);assert.equal(await page.locator('#accent .mic-btn').count(),1);
    await f.idleModels();assert.deepEqual(f.errors,[]);await f.context.close();
    passed.push(`${profile.name}: installed LLM/ASR/voice; roll/new passage/drill/missed-word results use zero LLM or voice initialization, even in desktop layout`);
@@ -129,13 +134,13 @@ const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>tru
    await startRecording();await page.locator('#accent .drill-nav button').last().click();await off('New paragraph');
    await startRecording();await page.locator('#accent .drill-nav button').first().click();await off('Again');
    await startRecording();await page.locator('#accent .sum-head .back').click();await off('Back home');
-   await page.click('#drill-start');await page.locator('#accent .drill-text:not(.para)').waitFor();
+   await openDrill(page);await page.locator('#accent .drill-text:not(.para)').waitFor();
    await startRecording();await page.locator('#accent .drill-nav button').last().click();await off('Next');
    await startRecording();await page.locator('#accent .drill-nav button').first().click();await off('Prev');
    await startRecording();await page.click('#tab-talk');await off('Switching to Talk');
    await page.click('#tab-accent');await page.locator('#accent .mic-btn:not(.rec)').waitFor();
    await startRecording();await page.locator('#accent .sum-head .back').click();await off('Change drill');
-   await page.click('#drill-start');await page.locator('#accent .drill-text:not(.para)').waitFor();
+   await openDrill(page);await page.locator('#accent .drill-text:not(.para)').waitFor();
    await f.record();await off('Completed take');await page.click('#tab-talk');await off('Leaving after a completed take');
    await page.click('#tab-accent');await page.locator('#accent .drill-nav button').last().click();await page.locator('#accent .score').waitFor({state:'detached'});
    const repaint=()=>page.evaluate(async()=>(await import('./js/accent.js')).renderAccent()); // what a language change or closing Settings does
@@ -156,7 +161,9 @@ const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>tru
    await off('Late capture setup after repaint');assert.equal(await page.locator('#accent .mic-btn.rec, #accent .mic-btn.busy').count(),0);
    await page.click('#tab-talk');await page.goBack();await page.waitForFunction(()=>!document.getElementById('view-accent').hidden);
    await startRecording();await page.goForward();await page.waitForFunction(()=>!document.getElementById('view-talk-home').hidden);await off('Browser Forward');
-   await page.click('#tab-me');await startRecording('#me');
+   await page.click('#tab-me');await page.locator('#me-voice > summary').click();await startRecording('#me');
+   await page.locator('#me-voice > summary').click();await off('Collapsing voice matching');
+   await page.locator('#me-voice > summary').click();await startRecording('#me');
    await page.evaluate(async()=>(await import('./js/accent.js')).cleanupAccent());
    assert.equal(await page.evaluate(()=>ASoundMic.status().mic),'recording','old accent cleanup must not cancel the Me microphone');
    await page.click('#tab-accent');await off('Leaving Me');
@@ -168,7 +175,7 @@ const microphone = `window.ASoundMic={supported:true,RATE:16000,hasModel:()=>tru
    await page.evaluate(async()=>{(await import('./js/device.js')).setLayoutMode('phone')});
    await page.click('#check-start');await page.locator('#accent .drill-text.para').waitFor();
    await f.record();await page.waitForFunction(()=>diag.jsonCalls===2);
-   await page.locator('#accent .sum-head .back').click();await page.click('#drill-start');await page.waitForFunction(()=>diag.jsonCalls===3);
+   await page.locator('#accent .sum-head .back').click();await openDrill(page);await page.waitForFunction(()=>diag.jsonCalls===3);
    await f.record();await page.waitForFunction(()=>diag.jsonCalls===4);
    assert.equal(await page.evaluate(()=>diag.llmLoads),1);assert.deepEqual(f.errors,[]);await f.context.close();
    passed.push('desktop keeps all four existing generation paths; phone layout does not change device capability');

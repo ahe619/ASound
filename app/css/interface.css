@@ -1,0 +1,89 @@
+/* 1.0: one clear starting point per page; optional controls open on demand. */
+.topbar {
+  --header-bg: var(--surface); --header-ink: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .wrap { min-height: 64px; }
+.brand { font-size: 19px; letter-spacing: -.025em; gap: 9px; }
+.brand-mark { border-radius: 10px; }
+.topbar .tab { color: var(--muted); opacity: 1; font-weight: 600; border-radius: 10px; }
+.topbar .tab[aria-selected="true"] { color: var(--blue); background: var(--blue-soft); box-shadow: none; border-radius: 10px; }
+.topbar .tab:hover, .topbar .icon-btn:hover { background: var(--surface-2); }
+.topbar .icon-btn { color: var(--muted); }
+.view > .wrap { padding-top: 28px; }
+.page-intro { display: flex; flex-direction: column; gap: 8px; }
+.page-intro .title { font-size: 25px; letter-spacing: -.025em; line-height: 1.35; }
+.page-intro .lede { font-size: 14px; line-height: 1.7; max-width: 50em; }
+.practice-launch { padding: 22px; gap: 16px; border-color: transparent; background: var(--surface); }
+.practice-launch .eyebrow { color: var(--muted); }
+.launch-title { font-size: 24px; font-weight: 700; }
+.practice-launch > .btn, .practice-launch > .row > .btn { min-width: 160px; }
+.practice-launch > .btn { align-self: flex-start; }
+.practice-launch .btn.hot { background: var(--blue); color: var(--blue-ink); border-color: transparent; }
+.ui-disclosure { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); min-width: 0; }
+.ui-disclosure > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; position: relative; padding: 17px 42px 17px 18px; list-style: none; cursor: pointer; min-height: 60px; }
+.ui-disclosure > summary::-webkit-details-marker { display: none; }
+.ui-disclosure > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); position: absolute; right: 20px; top: 24px; }
+.ui-disclosure[open] > summary::after { transform: rotate(225deg); top: 28px; }
+.ui-disclosure-title { font-weight: 600; font-size: 15px; }
+.ui-disclosure-note { color: var(--muted); font-size: 12px; margin-inline-start: auto; max-width: 65%; overflow-wrap: anywhere; }
+.ui-disclosure-body { display: flex; flex-direction: column; gap: 16px; padding: 0 18px 18px; }
+.ui-disclosure-body > .card { padding: 0; border: 0; background: transparent; }
+.ui-disclosure-body .opt { padding: 13px; }
+.ui-disclosure-body .opt-en { font-size: 17px; }
+.ui-disclosure-body .opt-desc { font-size: 12px; line-height: 1.5; }
+.ui-disclosure-body .ui-disclosure { border-color: var(--line); }
+.ui-disclosure summary:focus-visible { outline-offset: -4px; border-radius: 14px; }
+/* Native details content may reset inherited box sizing in the browser. */
+.ui-disclosure > summary, .ui-disclosure-body { box-sizing: border-box; }
+.mode-card { box-shadow: none; }
+#vocab > nav.seg { background: transparent; border-radius: 0; padding: 0; border-bottom: 1px solid var(--line); gap: 18px; }
+#vocab > nav.seg button { flex: none; border-radius: 0; padding-inline: 0; background: transparent; color: var(--muted); box-shadow: none; }
+#vocab > nav.seg button[aria-pressed="true"] { color: var(--blue); box-shadow: inset 0 -2px var(--blue); }
+.word-study .ws-intro { padding: 0; align-items: flex-start; }
+.word-study .ws-intro .title { margin: 0 0 5px; font-size: 25px; }
+.word-study .ws-deck { min-height: 72px; padding: 12px; gap: 3px; }
+.word-study .ws-deck strong { font-size: 15px; }
+.word-study .ws-start { padding: 16px; gap: 13px; }
+.word-study .ws-start > .ui-disclosure { border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0; }
+.word-study .ws-start > .ui-disclosure > summary { padding-inline-start: 0; }
+.word-study .ws-start > .ui-disclosure > .ui-disclosure-body { padding-inline: 0; }
+.word-study .ws-start-actions { flex-wrap: nowrap; gap: 8px; }
+.word-study .ws-start-actions .btn { flex: 1 1 0; padding-inline: 10px; font-size: 14px; min-width: 0; }
+.word-study .ws-source { padding: 0 4px; }
+.sheet-panel { gap: 10px; padding-top: 20px; }
+.sheet-head { position: sticky; top: -20px; z-index: 1; padding-block: 8px; background: var(--surface); }
+.sheet-head h2 { font-size: 22px; }
+.settings-intro { margin: -4px 0 8px; }
+.settings-link { display: flex; gap: 12px; align-items: center; width: 100%; min-height: 60px; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; background: var(--surface); text-align: start; font-weight: 600; }
+.settings-link span { flex: 1; }
+.settings-link > .ic:last-child { color: var(--muted); width: 16px; }
+#settings .ui-disclosure-body { gap: 20px; }
+#settings .ui-disclosure > summary { flex-direction: column; align-items: flex-start; gap: 3px; }
+#settings .ui-disclosure-note { margin: 0; max-width: 100%; }
+#settings .ui-disclosure > summary::after { top: 29px; }
+#settings .ui-disclosure[open] > summary::after { top: 33px; }
+#settings .ui-disclosure .ui-disclosure > summary { min-height: 48px; }
+#settings .ui-disclosure .ui-disclosure > summary::after { top: 20px; }
+#settings .ui-disclosure .ui-disclosure[open] > summary::after { top: 24px; }
+#settings .field-label { letter-spacing: 0; }
+#settings #natural-status:empty { display: none; }
+@media (min-width: 900px) {
+  #talk-home, #accent, #me { max-width: 840px; }
+  .word-study .ws-start { max-width: none; }
+  .practice-launch { padding: 26px; }
+}
+:root[data-layout="phone"] .topbar .wrap { padding-bottom: 8px; }
+:root[data-layout="phone"] .tabs { gap: 4px; }
+:root[data-layout="phone"] .view > .wrap { padding-top: 20px; }
+:root[data-layout="phone"] .stack { gap: 16px; }
+:root[data-layout="phone"] .practice-launch { padding: 18px; }
+:root[data-layout="phone"] .practice-launch > .btn, :root[data-layout="phone"] .practice-launch > .row > .btn { width: 100%; }
+@media (max-width: 600px) {
+  .topbar .wrap { padding-bottom: 8px; }
+  .tabs { gap: 4px; }
+  .view > .wrap { padding-top: 20px; }
+  .stack { gap: 16px; }
+  .practice-launch { padding: 18px; }
+  .practice-launch > .btn, .practice-launch > .row > .btn { width: 100%; }
+}

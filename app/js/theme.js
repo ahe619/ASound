@@ -45,7 +45,7 @@
     // Native form controls follow the explicit selection even if the OS differs.
     root.style.colorScheme = resolvedTheme();
     const themeColor = document.querySelector('meta[name="theme-color"]');
-    if (themeColor) themeColor.content = resolvedTheme() === "dark" ? "#121A3A" : "#0021A5";
+    if (themeColor) themeColor.content = resolvedTheme() === "dark" ? "#121A3A" : "#FFFFFF";
     labelButton();
   }
 
