@@ -28,7 +28,7 @@ MARKER = ".asound-web-build"
 DIRECTORIES = {"audio", "css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
 OPTIONAL_ROOT_FILES = {"repair.html", "voice-check.html"}
-LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/",
+LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/", "vocabulary/relations.json",
                  "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'
@@ -139,6 +139,13 @@ def build(source, output, version, license_file=None, model_base_url=None, model
             if not (stage / name).is_file():
                 raise ValueError(f"Missing required web asset: {name}")
         optional_files = set()
+        catalog_path = stage / "packs.json"
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        # Gated downloads must never become unconditional service-worker mirrors.
+        if catalog.get("aliyunDownload"):
+            download_bases = []
+            catalog.pop("downloadBases", None)
+            catalog_path.write_text(encode(catalog) + "\n", encoding="utf-8", newline="\n")
         if model_base_url or model_packs is not None or with_web_voice or download_bases:
             catalog_path = stage / "packs.json"
             catalog = json.loads(catalog_path.read_text(encoding="utf-8"))

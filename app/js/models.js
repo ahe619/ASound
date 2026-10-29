@@ -7,6 +7,7 @@ import { confirmInline } from "./widgets.js";
 import {
   packList, packById, packStatus, packMode, recommended, variant, activePacks, ready, install, cancel, remove,
   freeSpace, resolvedSource, setSource, gpuInfo, sourceList, checkConnections, connectionStatus,
+  downloadRoute, setDownloadRoute, aliyunAvailable, aliyunApproved, approveAliyun, downloadLocked,
 } from "./packs.js";
 
 const SECTIONS = [
@@ -18,6 +19,9 @@ const SECTIONS = [
 
 let setupMode = false;
 let afterSetup = null;
+let invitationDraft = "";
+let invitationError = false;
+let invitationChecking = false;
 const expandedDetails = new Set();
 registerTab("models", (route) => {
   setupMode = !!route.setup;
@@ -64,7 +68,7 @@ export function renderModels() {
       h("strong", null, t("models.quickTitle")),
       h("p", { class: "hint-line" }, t("models.quickList", { list: recGroups.map((g) => t(`pack.${g}.name`)).join(" + "), size: gb(missingSize) })),
       h("div", { class: "actions" },
-        h("button", { type: "button", class: "btn hot", disabled: !missing.length || busy || insecureWeb(), onclick: () => missing.forEach((g) => install(variant(g))) }, icon("download"), t("models.quickGo", { size: gb(missingSize) }))))
+        h("button", { type: "button", class: "btn hot", disabled: !missing.length || busy || insecureWeb() || downloadLocked(), onclick: () => missing.forEach((g) => install(variant(g))) }, icon("download"), t("models.quickGo", { size: gb(missingSize) }))))
     : null;
 
   const startRow = () => (setupMode
@@ -87,16 +91,43 @@ export function renderModels() {
   const free = freeSpace();
   fill($("#models"),
     h("header", { class: "sum-head" }, head),
+    web ? downloadChoices(busy || connection.checking) : null,
     insecureWeb() ? h("p", { class: "note-card warn" }, t("models.secureRequired")) : null,
     web ? voiceDownloadCard({ study: true }) : null,
     quick,
     web ? h("p", { class: "note-card" }, t("models.webDownloadNote")) : null,
     startRow(),
     SECTIONS.map((sec) => section(sec, rec, active, web)),
-    h("details", { class: "download-options", "data-download-detail": "connections", open: expandedDetails.has("connections") },
-      h("summary", { class: "field-label" }, t("models.connectionOptions")), sourceBox),
+    downloadRoute() !== "aliyun" ? h("details", { class: "download-options", "data-download-detail": "connections", open: expandedDetails.has("connections") },
+      h("summary", { class: "field-label" }, t("models.connectionOptions")), sourceBox) : null,
     h("p", { class: "hint-line" }, [free != null ? t(web ? "models.freeWeb" : "models.free", { size: gb(free) }) : "", t("models.licenses")].filter(Boolean).join(" ")),
     isReady ? startRow() : null);
+}
+
+function downloadChoices(busy) {
+  const route = downloadRoute();
+  const code = h("input", { id: "download-invitation", type: "text", autocomplete: "off", autocapitalize: "characters",
+    spellcheck: "false", maxlength: "128", placeholder: t("models.invitePlaceholder"), "aria-label": t("models.inviteLabel"),
+    disabled: busy || invitationChecking, oninput: event => { invitationDraft = event.target.value; invitationError = false; } });
+  code.value = invitationDraft;
+  const form = h("form", { class: "stack-xs", onsubmit: async event => {
+    event.preventDefault();
+    if (busy || invitationChecking) return;
+    invitationChecking = true; renderModels();
+    try { invitationError = !await approveAliyun(invitationDraft); if (!invitationError) invitationDraft = ""; }
+    catch { invitationError = true; }
+    finally { invitationChecking = false; renderModels(); }
+  } }, h("label", { class: "field-label", for: "download-invitation" }, t("models.inviteLabel")), code,
+  h("button", { type: "submit", class: "btn primary", disabled: busy || invitationChecking }, t(invitationChecking ? "models.inviteChecking" : "models.inviteConfirm")),
+  invitationError ? h("p", { role: "alert", class: "pack-error" }, t("models.inviteInvalid")) : null);
+  return h("section", { class: "card stack-sm download-choices", "aria-label": t("models.downloadChoice") },
+    h("h2", { class: "sec-title" }, t("models.downloadChoice")),
+    h("div", { class: "seg" }, ["original", "aliyun"].map(id => h("button", { type: "button", id: `download-route-${id}`,
+      "aria-pressed": String(route === id), disabled: busy || invitationChecking,
+      onclick: () => { invitationError = false; setDownloadRoute(id); } }, t(`models.route.${id}`)))),
+    h("p", { class: "hint-line" }, t(route === "original" ? "models.originalNote" : "models.aliyunNote")),
+    route === "aliyun" ? !aliyunAvailable() ? h("p", { class: "note-card" }, t("models.aliyunUnavailable"))
+      : aliyunApproved() ? h("p", { class: "pill ok", role: "status" }, t("models.inviteApproved")) : form : null);
 }
 
 function section(sec, rec, active, web) {
@@ -119,6 +150,7 @@ export function voiceDownloadCard({ study = false } = {}) {
     h("h2", { class: "sec-title" }, t("models.voiceOnlyTitle")),
     h("p", { class: "hint-line" }, t("models.voiceOnlyNote")),
     insecureWeb() ? h("p", { class: "note-card warn" }, t("models.secureRequired")) : null,
+    downloadLocked() ? h("button", { type: "button", class: "btn", onclick: () => showModels() }, t("models.inviteGo")) : null,
     h("ul", { class: "pack-list" }, packRow("voice", { key: "voice" }, recommended(), activePacks())),
     study ? h("button", { type: "button", class: "btn", onclick: () => setTab("vocab") }, t("models.studyWithoutModels")) : null);
 }
@@ -145,7 +177,7 @@ function packRow(group, sec, rec, active) {
   } else if (st.state === "downloading" || st.state === "queued") {
     actions.push(h("button", { type: "button", class: "btn quiet", onclick: () => cancel(id) }, t("models.cancel")));
   } else {
-    actions.push(h("button", { type: "button", class: "btn primary", disabled: insecureWeb(), onclick: () => { if (sec.choose && !active[sec.choose]) choose(sec.choose, group, false); install(id); } },
+    actions.push(h("button", { type: "button", class: "btn primary", disabled: insecureWeb() || downloadLocked(), onclick: () => { if (sec.choose && !active[sec.choose]) choose(sec.choose, group, false); install(id); } },
       icon("download"), st.state === "partial" ? t("models.resume") : t("models.download")));
     if (st.state === "partial") {
       const del = h("button", { type: "button", class: "icon-btn sm", "aria-label": t("models.remove"), title: t("models.remove") }, icon("trash"));

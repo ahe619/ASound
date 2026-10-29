@@ -102,6 +102,7 @@ export const prefs = Object.assign(
     llm: "",               // model pack group: llm-0.8b | llm-2b | llm-4b ("" = recommended for this device)
     asr: "",               // asr-tiny | asr-base
     source: "auto",        // auto | hf | mirror | deployment (configured by the web build)
+    downloadRoute: "original", // original | aliyun (invitation-gated UI)
   },
   readJSON(K_PREFS, {}),
 );

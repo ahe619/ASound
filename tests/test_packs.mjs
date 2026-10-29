@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { webcrypto, createHash } from "node:crypto";
 
 const source = (await readFile(new URL("../app/js/packs.js", import.meta.url), "utf8"))
   .replace(/^import .*;\r?\n/gm, "").replace(/^export /gm, "")
-  + "\nglobalThis.api = { initPacks, recommended, activePacks, variant, ready, packStatus, packMode, sourceList, hostedVoice, engineConfig, fileUrl, canonKey, checkConnections, connectionStatus, resolvedSource, refresh, install, cancel, remove, setSource };";
+  + "\nglobalThis.api = { initPacks, recommended, activePacks, variant, ready, packStatus, packMode, sourceList, hostedVoice, engineConfig, fileUrl, canonKey, checkConnections, connectionStatus, resolvedSource, refresh, install, cancel, remove, setSource, downloadRoute, setDownloadRoute, approveAliyun, aliyunApproved, downloadLocked };";
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const deferred = () => {
@@ -94,6 +95,7 @@ async function fixture({ mobile = false, gpu = true, f16 = true, vendor = "NVIDI
     env.partials.set(keyFor(data.packs.find((p) => p.id === id).files[0]), bytes);
   }
   const context = {
+    crypto: webcrypto, TextEncoder,
     URL, URLSearchParams, Response, AbortController, DOMException, performance, setTimeout, clearTimeout,
     location: { search: "", href: "https://app.test/ASound/" },
     console: { warn: (...args) => env.warnings.push(args) },
@@ -150,6 +152,41 @@ test("phones start with the small GPU model even when they report 8 GB memory", 
   assert.deepEqual(plain(cpu.api.recommended()), { llm: "llm-cpu", asr: "asr-tiny" });
 });
 
+const inviteCode = "TEST-INVITATION";
+function inviteCatalog(data = catalog()) {
+  data.aliyunDownload = { root: "https://oss.test", codeSha256: createHash("sha256").update(inviteCode).digest("hex") };
+  return data;
+}
+
+test("original downloads never probe OSS; a locked route cannot queue any model", async () => {
+  const env = await fixture({ data: inviteCatalog() });
+  assert.equal(env.api.downloadRoute(), "original");
+  await env.api.checkConnections();
+  assert.ok(env.requests.every(row => !row.url.startsWith("https://oss.test")));
+  assert.equal(env.api.setDownloadRoute("aliyun"), true);
+  assert.equal(env.api.downloadLocked(), true);
+  assert.equal(await env.api.approveAliyun("wrong"), false);
+  await env.api.install("asr-tiny"); await flush();
+  assert.equal(env.downloads.length, 0);
+  assert.equal(env.api.packStatus("asr-tiny").state, "absent");
+  env.api.setDownloadRoute("original");
+  assert.equal(env.api.downloadLocked(), false);
+});
+
+test("approval switches model downloads to OSS only and preserves installed WebLLM cache identity", async () => {
+  const env = await fixture({ data: inviteCatalog(), flags: { "llm-0.8b-f16": "aliyun" } });
+  env.api.setDownloadRoute("aliyun");
+  assert.equal(await env.api.approveAliyun(" test-invitation "), true);
+  assert.deepEqual(plain(env.api.sourceList()), ["aliyun"]);
+  await env.api.install("asr-tiny");
+  await until(() => env.api.packStatus("asr-tiny").state === "installed", "ASR completes from OSS");
+  assert.deepEqual(plain(env.downloads[0].urls), ["https://oss.test/models/test/asr-tiny/resolve/main/config.json"]);
+  env.api.setDownloadRoute("original");
+  const config = await env.api.engineConfig("llm-0.8b-f16");
+  assert.equal(config.llm.model, "https://oss.test/models/test/model-0.8-f16");
+  assert.equal(env.stored.get("asound.aliyun-invitation"), env.data.aliyunDownload.codeSha256);
+});
+
 function hostedVoiceCatalog(version = "abcdef0123456789") {
   const data = catalog();
   const repo = "onnx-community/Kokoro-82M-v1.0-ONNX";
@@ -157,6 +194,25 @@ function hostedVoiceCatalog(version = "abcdef0123456789") {
   data.packs.find((p) => p.id === "voice").files = [{ repo, path: "onnx/model_quantized.onnx", size: 10 }];
   return data;
 }
+
+test("invited voice downloads use the versioned OSS path and cannot change routes while active", async () => {
+  const waiting = deferred();
+  const env = await fixture({ data: inviteCatalog(hostedVoiceCatalog()), download: async (args) => {
+    await waiting.promise;
+    await args.cache.put(args.key, new Response(new Uint8Array(args.file.size)));
+    args.onBytes(args.file.size);
+  } });
+  env.api.setDownloadRoute("aliyun");
+  await env.api.approveAliyun(inviteCode);
+  await env.api.install("voice");
+  await until(() => env.downloads.length === 1, "voice download starts");
+  assert.equal(env.api.setDownloadRoute("original"), false);
+  assert.deepEqual(plain(env.downloads[0].urls), ["https://oss.test/voice-models/abcdef0123456789/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx"]);
+  waiting.resolve();
+  await until(() => env.api.packStatus("voice").state === "installed", "voice completes");
+  assert.equal(env.api.setDownloadRoute("original"), true);
+  assert.equal(env.api.packStatus("voice").state, "installed", "route switch keeps the verified voice cache");
+});
 
 test("hosted voice downloads and runtime configuration stay on the site's own origin without probing external sources", async () => {
   const env = await fixture({ data: hostedVoiceCatalog(), mobile: true });

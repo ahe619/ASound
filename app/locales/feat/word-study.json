@@ -125,7 +125,20 @@
     "wstudy.compare": "Compare: model, you, model",
     "wstudy.missedTitle": "Words to look at again",
     "wstudy.retryMissed": "Practice these {n} again",
-    "wstudy.sayAgain": "Say it again (not scored)"
+    "wstudy.sayAgain": "Say it again (not scored)",
+    "wstudy.family": "Word family",
+    "wstudy.forms": "Word forms",
+    "wstudy.relationsSource": "Relations: syllabus and ECDICT. Related words may fall outside the selected exam list.",
+    "wstudy.picturedOnly": "Only words with pictures",
+    "wstudy.picturedNote": "Uses pictured words matching your list and filters; this is not the full exam list.",
+    "wstudy.form.past": "Past tense",
+    "wstudy.form.participle": "Past participle",
+    "wstudy.form.ing": "Present participle",
+    "wstudy.form.third": "Third-person singular",
+    "wstudy.form.plural": "Plural",
+    "wstudy.form.comparative": "Comparative",
+    "wstudy.form.superlative": "Superlative",
+    "wstudy.form.base": "Base form"
   },
   "zh": {
     "wstudy.loading": "正在加载词库…",
@@ -253,6 +266,19 @@
     "wstudy.compare": "对比：示范、你、示范",
     "wstudy.missedTitle": "需要再看一遍的词",
     "wstudy.retryMissed": "再练这 {n} 个词",
-    "wstudy.sayAgain": "再说一次（不计分）"
+    "wstudy.sayAgain": "再说一次（不计分）",
+    "wstudy.family": "同族词与衍生词",
+    "wstudy.forms": "词形变化",
+    "wstudy.relationsSource": "关联依据：考试词表与 ECDICT；关联词不代表一定属于当前考试范围。",
+    "wstudy.picturedOnly": "只练有配图的单词",
+    "wstudy.picturedNote": "按当前词库、主题和场景筛选已有配图的词；不代表完整考试范围。",
+    "wstudy.form.past": "过去式",
+    "wstudy.form.participle": "过去分词",
+    "wstudy.form.ing": "现在分词",
+    "wstudy.form.third": "第三人称单数",
+    "wstudy.form.plural": "复数",
+    "wstudy.form.comparative": "比较级",
+    "wstudy.form.superlative": "最高级",
+    "wstudy.form.base": "原形"
   }
 }

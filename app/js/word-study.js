@@ -6,6 +6,7 @@ import { micButton, cancelMicButton } from "./mic.js";
 import { disclosure } from "./widgets.js";
 import { vocab } from "./store.js";
 import { createWordIllustration, warmPictures, preparePictures, hasPicture } from "./word-illustrations.js";
+import { wordRelations } from "./word-relations.js";
 import { currentRoute, navigate, goBack, registerTabDetail, restoreNavigationScroll, isNewNavigationVisit } from "./nav.js";
 import {
   TOPICS, SCENARIOS, loadWordBank, normalizeOptions, filterWords, chooseWords,
@@ -234,7 +235,7 @@ export async function renderWordStudy(root) {
   host.classList.add("word-study");
   if (!bank || !saved) fill(host, h("p", { class: "hint-line", role: "status" }, t("wstudy.loading")));
   try {
-    const [loaded] = await Promise.all([loadWordBank(), loadAssets()]);
+    const [loaded] = await Promise.all([loadWordBank(), loadAssets(), preparePictures()]);
     if (mine !== generation || host !== root || !root.isConnected) return;
     bank = loaded;
     wordsById = new Map(bank.words.map(word => [word.id, word]));
@@ -346,7 +347,7 @@ function updateOption(key, value, focusId) {
 
 function setupView() {
   const options = saved.options;
-  const pool = filterWords(bank.words, options);
+  const pool = filterWords(bank.words, options).filter(word => !options.picturedOnly || hasPicture(word));
   const now = Date.now();
   const learned = pool.filter(word => Number(saved.progress[word.id]?.seen) > 0).length;
   const due = pool.filter(word => Number(saved.progress[word.id]?.seen) > 0 && Number(saved.progress[word.id]?.due) <= now).length;
@@ -373,6 +374,9 @@ function setupView() {
       choices(t("wstudy.practiceLabel"), PRACTICES.map(id => ({ id, key: `wstudy.practice.${id}` })), options.practice,
         (value, id) => updateOption("practice", value, id), "ws-practice"),
       h("p", { class: "hint-line" }, t(`wstudy.practiceHint.${options.practice}`)),
+      h("label", { class: "check" }, h("input", { type: "checkbox", id: "ws-pictured-only", checked: options.picturedOnly,
+        onchange: action(event => updateOption("picturedOnly", event.target.checked, "ws-pictured-only")) }), t("wstudy.picturedOnly")),
+      options.picturedOnly ? h("p", { class: "hint-line" }, t("wstudy.picturedNote")) : null,
       disclosure("study-options", t("ui.studyOptions"), [
         h("p", { class: "hint-line" }, t("wstudy.filterHint")),
         choices(t("wstudy.topicLabel"), TOPICS, options.topic, (value, id) => updateOption("topic", value, id), "ws-topic", true),
@@ -416,7 +420,7 @@ function sourceDetails(deck) {
 
 function begin(mode) {
   // "Say it" is built around the picture cue: draw a new round from pictured words when there are enough.
-  let pool = bank.words;
+  let pool = bank.words.filter(word => !saved.options.picturedOnly || hasPicture(word));
   if (saved.options.practice === "say" && mode === "random") {
     const pictured = filterWords(bank.words, saved.options).filter(word => hasPicture(word));
     if (pictured.length >= saved.options.size) pool = pictured;
@@ -503,6 +507,7 @@ function cardView() {
         h("p", { id: "ws-meaning", tabindex: "-1", class: "ws-meaning", lang: "zh-CN" }, word.meaning),
         word.example ? h("p", { class: "ex", lang: "en" }, word.example) : null,
         createWordIllustration(word), // after "Say it" too: the picture with the word is what is remembered
+        wordRelations(word),
         practice === "cards" ? h("p", { class: "hint-line" }, t("wstudy.rateHint")) : null) : practice === "cards"
         ? h("div", { class: "ws-reveal" }, h("p", { class: "hint-line" }, t("wstudy.recallHint")),
           h("button", { type: "button", class: "btn primary big", onclick: action(reveal) }, t("wstudy.reveal"))) : null),

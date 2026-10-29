@@ -27,6 +27,19 @@ class WebBuildTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
+    def test_invitation_downloads_cannot_become_automatic_runtime_mirrors(self):
+        self.put("packs.json", json.dumps({"aliyunDownload": {"root": "https://oss.test", "codeSha256": "a"*64}, "downloadBases": ["https://oss.test"]}))
+        self.put("kokoro/neural-tts.js", "// runtime")
+        self.put("vocabulary/relations.json", '{"schemaVersion":1,"relations":{}}')
+        build(self.app, self.out, "1.0.1", download_bases=["https://oss.test"])
+        worker = (self.out / "sw.js").read_text(encoding="utf-8")
+        self.assertNotIn('"mirrors":', worker)
+        catalog = json.loads((self.out / "packs.json").read_text(encoding="utf-8"))
+        self.assertNotIn('downloadBases', catalog)
+        line = next(line for line in worker.splitlines() if line.startswith("const ASSETS = "))
+        assets = json.loads(line.removeprefix("const ASSETS = ").split("; // @asound-assets")[0])
+        self.assertTrue(next(asset for asset in assets if asset['url'] == 'vocabulary/relations.json')['lazy'])
+
     def test_manifest_is_complete_and_hashes_published_bytes(self):
         self.put("models/weights.bin", "never publish weights")
         self.put("dev/demo.html", "never publish test pages")

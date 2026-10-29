@@ -11,7 +11,9 @@ const warmed = new Set();
 
 function loadIndex() {
   if (!indexPromise) {
-    indexPromise = fetch(indexURL).then(async (response) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    indexPromise = fetch(indexURL, { signal: controller.signal }).then(async (response) => {
       if (!response.ok) throw new Error("pictures unavailable");
       const data = await response.json();
       if (data.schemaVersion !== 1 || !data.pictures || typeof data.pictures !== "object") throw new Error("invalid picture index");
@@ -23,7 +25,7 @@ function loadIndex() {
         pictures.set(id, { src, width, height, term, sense: { zh: senseZh, en: senseEn }, alt: { zh: altZh, en: altEn } });
       }
       return pictures;
-    }).catch(() => { indexPromise = null; return null; });
+    }).catch(() => { indexPromise = null; return null; }).finally(() => clearTimeout(timeout));
   }
   return indexPromise;
 }
@@ -56,7 +58,7 @@ export async function pictureFor(word) {
 export const hasPicture = (word) => !!(pictures && word && pictures.get(word.id)?.term === word.term);
 
 // Start loading the index (cheap) so later checks are instant.
-export const preparePictures = () => { loadIndex(); loadStyle().catch(() => {}); };
+export const preparePictures = () => { loadStyle().catch(() => {}); return loadIndex(); };
 
 // Fetch the next cards' pictures in the background so they appear without a wait.
 export async function warmPictures(words) {

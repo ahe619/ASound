@@ -42,7 +42,8 @@ export function renderMe() {
     disclosure("me-placement", t("me.placeTitle"), placementCard(!!last), { note: t("ui.optional") }),
     disclosure("me-profile", t("me.profileTitle"), profileCard, { note: p ? p.field || "" : t("ui.optional") }),
     voiceSection,
-    lastCheck ? h("p", { class: "note-card" }, t("me.lastCheck", { date: fmtDate(lastCheck.at), score: lastCheck.score })) : null);
+    lastCheck ? h("p", { class: "note-card" }, t("me.lastCheck", { date: fmtDate(lastCheck.at), score: lastCheck.score })) : null,
+    h("p", { class: "hint-line app-version", "aria-label": "ASound V1.01" }, "ASound · V1.01"));
 }
 
 function placementCard(again) {
