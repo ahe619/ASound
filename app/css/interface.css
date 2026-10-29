@@ -6,6 +6,7 @@
 .topbar .wrap { min-height: 64px; }
 .brand { font-size: 19px; letter-spacing: -.025em; gap: 9px; }
 .brand-mark { border-radius: 10px; }
+.app-version { display: inline-block; font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--muted); white-space: nowrap; }
 .topbar .tab { color: var(--muted); opacity: 1; font-weight: 600; border-radius: 10px; }
 .topbar .tab[aria-selected="true"] { color: var(--blue); background: var(--blue-soft); box-shadow: none; border-radius: 10px; }
 .topbar .tab:hover, .topbar .icon-btn:hover { background: var(--surface-2); }

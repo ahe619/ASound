@@ -26,6 +26,7 @@ export function normalizeOptions(value = {}) {
     scenario: SCENARIO_IDS.has(value.scenario) ? value.scenario : "",
     size: [10, 20, 30].includes(Number(value.size)) ? Number(value.size) : 20,
     practice: PRACTICES.includes(value.practice) ? value.practice : "cards",
+    picturedOnly: value.picturedOnly === true,
   };
 }
 

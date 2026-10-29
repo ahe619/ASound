@@ -2160,5 +2160,9 @@
    ],
    "size": 79666385
   }
- ]
+ ],
+ "aliyunDownload": {
+  "root": "https://soundoa-voice.oss-cn-wuhan-lr.aliyuncs.com",
+  "codeSha256": "064e3d97856a870c17595e732df4e5d7109e7646a7335e31acc93f643780054e"
+ }
 }

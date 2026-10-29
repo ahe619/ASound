@@ -3,6 +3,6 @@
 .ws-illustration figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 10px 12px; color: var(--ink); text-align: left; font-size: 13px; line-height: 1.5; }
 .ws-illustration-label { color: var(--muted); font-size: 11px; white-space: nowrap; }
 @media (max-width: 600px) { .ws-illustration { width: min(100%, 320px); } }
-.ws-illustration img { aspect-ratio: var(--ws-ratio, 4 / 3); object-fit: cover; transition: opacity 160ms ease; }
+.ws-illustration img { aspect-ratio: var(--ws-ratio, 4 / 3); object-fit: contain; transition: opacity 160ms ease; }
 .ws-illustration.is-loading img { opacity: 0; }
 .ws-illustration.is-loading figcaption { visibility: hidden; }

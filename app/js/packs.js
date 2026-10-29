@@ -33,7 +33,33 @@ export const packById = (id) => packList().find((p) => p.id === id) || null;
 export const packStatus = (id) => status[id] || { state: "absent", done: 0, total: (packById(id) || {}).size || 0 };
 export const freeSpace = () => free;
 export const resolvedSource = () => resolved;
-export const sourceList = () => Object.keys(catalog?.sources || {});
+// The optional invitation is a UI gate, not server-side access control.
+let invitationAccepted = false;
+export const downloadRoute = () => mode === "web" && prefs.downloadRoute === "aliyun" ? "aliyun" : "original";
+export const aliyunAvailable = () => mode === "web" && !!catalog?.aliyunDownload;
+export const aliyunApproved = () => invitationAccepted;
+export const downloadLocked = () => mode === "web" && downloadRoute() === "aliyun" && (!aliyunAvailable() || !aliyunApproved());
+export const downloadsBusy = () => packList().some(p => ["downloading", "queued"].includes(packStatus(p.id).state));
+export const sourceList = () => downloadRoute() === "aliyun" && aliyunAvailable() && aliyunApproved()
+  ? ["aliyun"] : Object.keys(catalog?.sources || {}).filter(name => name !== "aliyun");
+export function setDownloadRoute(route) {
+  if (!["original", "aliyun"].includes(route) || downloadsBusy() || checkingConnections) return false;
+  prefs.downloadRoute = route;
+  resolved = null;
+  connectionResults = null;
+  savePrefs(); emit(); return true;
+}
+export async function approveAliyun(code) {
+  const expected = catalog?.aliyunDownload?.codeSha256;
+  if (!aliyunAvailable() || downloadsBusy() || typeof code !== "string" || code.length > 128) return false;
+  const bytes = new TextEncoder().encode(code.trim().toUpperCase());
+  const result = await crypto.subtle.digest("SHA-256", bytes);
+  const actual = Array.from(new Uint8Array(result), byte => byte.toString(16).padStart(2, "0")).join("");
+  if (actual !== expected) return false;
+  invitationAccepted = true;
+  try { localStorage.setItem("asound.aliyun-invitation", expected); } catch {}
+  resolved = null; connectionResults = null; emit(); return true;
+}
 export const hostedVoice = () => mode === "web" && !!voiceRoot();
 let connectionResults = null;
 let checkingConnections = false;
@@ -41,13 +67,20 @@ export const connectionStatus = () => ({ checking: checkingConnections, results:
 
 export async function initPacks({ readOnly = false } = {}) {
   catalog = await fetch("packs.json", { cache: "no-cache" }).then((r) => r.json());
+  if (catalog.aliyunDownload) {
+    const [root] = validateDownloadBases([catalog.aliyunDownload.root]);
+    if (!/^[a-f0-9]{64}$/.test(catalog.aliyunDownload.codeSha256 || "")) throw new Error("Invalid invitation configuration");
+    catalog.aliyunDownload.root = root;
+    catalog.sources.aliyun = { models: `${root}/models`, libs: `${root}/models/libs` };
+    try { invitationAccepted = localStorage.getItem("asound.aliyun-invitation") === catalog.aliyunDownload.codeSha256; } catch {}
+  }
   if (!sourceList().length) throw new Error("No model download source configured");
   if (!readOnly && prefs.source !== "auto" && !sourceList().includes(prefs.source)) {
     prefs.source = "auto";
     savePrefs();
   }
   mode = FORCE_WEB ? "web" : await fetch("api/health", { cache: "no-store" }).then((r) => r.json()).then((j) => (j.packs ? "desktop" : "web")).catch(() => "web");
-  downloadBases = mode === "web" ? validateDownloadBases(catalog.downloadBases) : [];
+  downloadBases = mode === "web" && !catalog.aliyunDownload ? validateDownloadBases(catalog.downloadBases) : [];
   if (mode === "web") {
     voiceRoot(); // Validate the optional same-origin voice source before using it.
     await checkRuntimeRelease();
@@ -355,6 +388,9 @@ function hostedVoiceDownloadUrls(file) {
   // Mirrors only change where a verified, explicitly requested download comes from.
   if (downloadBases.length && !/^[a-f0-9]{64}$/i.test(file.sha256 || "")) throw new Error("Mirrored voice downloads require a SHA-256 digest");
   const relative = `${catalog.voiceSource.models}/${file.repo}/resolve/main/${file.path}`;
+  if (downloadRoute() === "aliyun" && aliyunAvailable() && aliyunApproved()) {
+    return [`${catalog.aliyunDownload.root}/${relative}`];
+  }
   return [...new Set([...downloadBases.map(base => `${base}/${relative}`), fileUrl(file, null)])];
 }
 function hostedVoiceFile(f) {
@@ -448,7 +484,7 @@ async function webStatus() {
 }
 // WebLLM keeps its own cache; we remember which language models finished loading once, and from where.
 const FLAG = "asound.llmCached.v1";
-function llmSource(id) { try { const source = JSON.parse(localStorage.getItem(FLAG) || "{}")[id]; return sourceList().includes(source) ? source : ""; } catch { return ""; } }
+function llmSource(id) { try { const source = JSON.parse(localStorage.getItem(FLAG) || "{}")[id]; return Object.hasOwn(catalog.sources, source) ? source : ""; } catch { return ""; } }
 function setLlmSource(id, source) {
   try {
     const all = JSON.parse(localStorage.getItem(FLAG) || "{}");
@@ -461,6 +497,7 @@ function setLlmSource(id, source) {
 
 export async function install(id) {
   if (!packById(id)) return;
+  if (mode === "web" && downloadLocked()) { emit(); return; }
   // A manual attempt (including a failed one) must not be restarted by a late idle callback.
   skipRuntimeRepair.add(id);
   if (mode === "desktop") {
@@ -589,6 +626,7 @@ async function pumpWeb() {
 }
 
 export function setSource(s) {
+  if (downloadsBusy() || downloadRoute() === "aliyun") return;
   if (s !== "auto" && !sourceList().includes(s)) return;
   prefs.source = s;
   savePrefs();

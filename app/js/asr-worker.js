@@ -8,10 +8,13 @@ env.backends.onnx.wasm.wasmPaths = new URL("../vendor/transformers/", import.met
 let asr = null;
 
 // "https://hf-mirror.com/onnx-community/x/resolve/main/onnx/a.onnx" -> "<canon>onnx-community/x/onnx/a.onnx"
-function canonCache(cacheName, canon) {
+function canonCache(cacheName, canon, base) {
   const key = (req) => {
     const u = new URL(typeof req === "string" ? req : req.url);
-    return canon + u.pathname.replace(/^\//, "").replace("/resolve/main/", "/");
+    const root = new URL(base);
+    const relative = u.origin === root.origin && u.pathname.startsWith(root.pathname)
+      ? u.pathname.slice(root.pathname.length) : u.pathname.replace(/^\//, "");
+    return canon + relative.replace("/resolve/main/", "/");
   };
   return {
     match: async (req) => (await caches.open(cacheName)).match(key(req)),
@@ -27,7 +30,7 @@ function setup(m) {
     env.remotePathTemplate = "{model}/resolve/{revision}/";
     env.useBrowserCache = false;
     env.useCustomCache = true;
-    env.customCache = canonCache(m.cache, m.canon);
+    env.customCache = canonCache(m.cache, m.canon, m.base);
   } else {
     env.allowRemoteModels = false;
     env.allowLocalModels = true;

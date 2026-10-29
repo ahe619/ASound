@@ -585,5 +585,19 @@
   "ui.theme.system": "跟随系统",
   "ui.theme.light": "白天",
   "ui.theme.dark": "黑夜",
-  "ui.voiceLibrary": "音色与声音包"
+  "ui.voiceLibrary": "音色与声音包",
+  "models.downloadChoice": "下载方式",
+  "models.route.original": "本地下载（原方式）",
+  "models.route.aliyun": "阿里云下载",
+  "models.originalNote": "沿用 GitHub 等原有下载来源，内容保存在当前设备。",
+  "models.aliyunNote": "使用国内下载服务，需要提供邀请码。下载后即可在当前设备使用。",
+  "models.inviteLabel": "邀请码",
+  "models.invitePlaceholder": "输入管理员提供的邀请码",
+  "models.inviteConfirm": "验证邀请码",
+  "models.inviteChecking": "正在验证…",
+  "models.inviteInvalid": "邀请码不正确，请检查后重试。",
+  "models.inviteApproved": "已获准使用阿里云下载",
+  "models.inviteGo": "到模型页验证邀请码",
+  "models.aliyunUnavailable": "国内下载服务尚未配置。请先使用原下载方式。",
+  "models.source.aliyun": "阿里云"
 }

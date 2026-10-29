@@ -585,5 +585,19 @@
   "ui.theme.system": "System",
   "ui.theme.light": "Light",
   "ui.theme.dark": "Dark",
-  "ui.voiceLibrary": "Voices & voice packs"
+  "ui.voiceLibrary": "Voices & voice packs",
+  "models.downloadChoice": "Download method",
+  "models.route.original": "Original download",
+  "models.route.aliyun": "Alibaba Cloud",
+  "models.originalNote": "Uses the original download sources and saves content on this device.",
+  "models.aliyunNote": "Uses our China download service. An invitation code is required; content is saved on this device.",
+  "models.inviteLabel": "Invitation code",
+  "models.invitePlaceholder": "Enter the code provided by the administrator",
+  "models.inviteConfirm": "Verify code",
+  "models.inviteChecking": "Verifying…",
+  "models.inviteInvalid": "That code was not accepted. Check it and try again.",
+  "models.inviteApproved": "Alibaba Cloud downloads unlocked",
+  "models.inviteGo": "Verify your code on the Models page",
+  "models.aliyunUnavailable": "This download service is not configured. Use the original method for now.",
+  "models.source.aliyun": "Alibaba Cloud"
 }

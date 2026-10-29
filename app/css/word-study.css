@@ -99,3 +99,10 @@
 .ws-say { display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .ws-say-type { display: flex; gap: 8px; width: min(100%, 360px); }
 .ws-say-type input { flex: 1; min-width: 0; }
+/* Related words appear only after revealing the answer. */
+.ws-relations { text-align: left; border-top: 1px solid var(--line); padding-top: 16px; }
+.ws-relations summary { cursor: pointer; font-weight: 600; padding-block: 8px; }
+.ws-family-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.ws-family-list p { white-space: pre-line; margin-top: 4px; font-size: 14px; line-height: 1.6; }
+.ws-forms dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; }
+.ws-forms dd { margin: 0; overflow-wrap: anywhere; }
