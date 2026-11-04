@@ -12,12 +12,12 @@ const localSource = readFileSync(new URL("../app/js/local-ai.js", import.meta.ur
   .replace('import(new URL("vendor/wllama/index.js", location.href).href)', "loadWllama()");
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 
-function fixture({ mode = "web", mobile = true } = {}) {
+function fixture({ mode = "web", mobile = true, beforeLoad = async () => {} } = {}) {
   const requests = [];
   let imports = 0, loads = 0, generations = 0;
   class Wllama {
     setCompat() {}
-    async loadModel() { loads++; }
+    async loadModel() { loads++; await beforeLoad(); }
     async *createChatCompletion() {
       generations++;
       yield { choices: [{ delta: { content: "Hello." }, finish_reason: "stop" }] };
@@ -70,5 +70,23 @@ test("native desktop startup preserves existing eager loading", async () => {
   assert.equal(f.context.ASoundAI.status().state, "ready");
   assert.deepEqual(f.counts(), { imports: 1, loads: 1, generations: 0 });
   assert.equal(await f.context.askModel("Hello"), "Hello.");
+  assert.deepEqual(f.counts(), { imports: 1, loads: 1, generations: 1 });
+});
+
+test("cancelling during first model load skips generation and leaves the queue usable", async () => {
+  let finishLoad;
+  const loading = new Promise(resolve => { finishLoad = resolve; });
+  const f = fixture({ beforeLoad: () => loading });
+  await f.startEngines();
+  const controller = new AbortController();
+  const request = f.context.askModel("Translate this", { signal: controller.signal });
+  const rejected = assert.rejects(request, error => error.code === "cancelled");
+  await flush();
+  assert.equal(f.counts().loads, 1);
+  controller.abort();
+  finishLoad();
+  await rejected;
+  assert.equal(f.counts().generations, 0);
+  assert.equal(await f.context.askModel("Next request"), "Hello.");
   assert.deepEqual(f.counts(), { imports: 1, loads: 1, generations: 1 });
 });

@@ -172,6 +172,7 @@
       if (opts.signal && opts.signal.aborted) throw { code: "cancelled" };
       let engine;
       try { engine = await load(); } catch (e) { throw { code: e && e.code === "no_model" ? "unavailable" : "upstream_error", message: String((e && e.message) || e) }; }
+      if (opts.signal && opts.signal.aborted) throw { code: "cancelled" };
       const messages = toMessages(input);
       const wantsObject = json && !/JSON array/i.test(messages.map((m) => m.content).join("\n"));
       const req = {
