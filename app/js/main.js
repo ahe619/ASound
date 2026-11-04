@@ -7,6 +7,7 @@ import { initTalk, renderTalkHome, resumeIfRecent } from "./talk.js";
 import { initAccent, renderAccent, cleanupAccent } from "./accent.js";
 import { renderVocab, paintVocabCount, cleanupVocab, isVocabPracticing } from "./vocab.js";
 import { renderMe } from "./me.js";
+import { renderTranslation, cleanupTranslation, isTranslationBusy } from "./translation.js";
 import { initSettings, renderVoices } from "./settings.js";
 import { onStoreChange } from "./store.js";
 import { repaintSaveButtons } from "./widgets.js";
@@ -32,6 +33,7 @@ function renderAll() {
   if (state.tab === "me") renderMe();
   if (state.tab === "models") renderModels();
   if (state.tab === "voices") renderVoices();
+  if (state.tab === "translate") renderTranslation();
   paintVocabCount();
 }
 
@@ -57,8 +59,12 @@ async function boot() {
   window.addEventListener("pagehide", cleanupVocab);
   window.addEventListener("pageshow", event => {
     if (event.persisted && state.tab === "vocab") renderVocab();
+    if (event.persisted && state.tab === "translate") renderTranslation();
   });
   registerTab("me", renderMe);
+  registerTab("translate", renderTranslation);
+  registerTabCleanup("translate", cleanupTranslation);
+  window.addEventListener("pagehide", cleanupTranslation);
   registerTab("voices", renderVoices);
   registerTabCleanup("voices", stopSpeaking);
   registerTabCleanup("me", () => window.ASoundMic?.cancel?.()); // "Find a voice like yours" records on Me
@@ -91,7 +97,7 @@ async function boot() {
   // Only hosted web releases update themselves. Bundled desktop/mobile assets use package updates.
   initUpdates({
     enabled: packMode() === "web" && !inAppShell,
-    canApply: () => !state.busy && state.tab !== "mode" && state.tab !== "accent"
+    canApply: () => !state.busy && !isTranslationBusy() && state.tab !== "mode" && state.tab !== "accent"
       && !(state.tab === "vocab" && isVocabPracticing())
       && !(state.tab === "talk" && state.talkView === "chat")
       && !["recording", "listening"].includes(window.ASoundMic?.status().mic),

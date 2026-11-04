@@ -1,0 +1,13 @@
+# Dictionary and translation — V1.02
+
+The separate Translate tab contains dictionary lookup and short English/Chinese translation. Dictionary lookup does not require an AI model. Sentence translation uses an installed local language model, accepts up to 300 characters, supports cancellation, and refuses to present a truncated completion as a finished translation.
+
+The dictionary is built from the same pinned, MIT-licensed ECDICT source used by the study project: revision `ab22ad36302cafc6349a050e2b60894855208055`, CSV SHA-256 `d1ecbdf9ee2b920afb6f430ca6b6bb9f559588cf0dff86e04bd255f9390843cc`. The license remains in `app/vocabulary/ECDICT-LICENSE.txt` and the root license ledger.
+
+`tools/prepare_dictionary.py` retains every nonempty source entry with a Chinese translation or English definition, without restricting it to study/exam lists. The result contains **770,611 entries**, of which **218,065 include a phonetic transcription**. Missing transcriptions are explicitly identified; pronunciation playback uses the site's existing speech controls and selected voice. Transcriptions are dictionary transcriptions, not promised to match every selectable accent. The dictionary's definitions and part-of-speech labels are source data, not AI-generated explanations.
+
+There are 726 shards selected by the first two normalized characters, totalling about 59.3 MB before transport compression. Only the index and queried shards are fetched; all dictionary data is marked lazy in the release manifest. At most four shards remain in application memory. The service worker verifies fetched release files and can reuse previously visited shards offline; unvisited shards still require a connection.
+
+Lookup handles case, normalized whitespace and phrases. Suggestions consider nearby spellings within the same two-character shard, including adjacent transpositions, and use source frequency ranks to prioritize common entries. They are suggestions, not a universal spelling checker. Word-form buttons use ECDICT's attested inflections. Recent successful lookups (up to 12) stay in the current browser and can be cleared. Draft text, mode and translation direction are remembered only for the browser session.
+
+Verification covers entries outside the study bank, phrases, spelling suggestions, source hashes and complete shard counts, lazy loading, normal/slow speech dispatch, mobile widths, navigation, missing-model behavior, cancellation and stale responses. Browser speech and translation tests use controlled adapters; they do not establish model translation accuracy or physical iPhone performance.

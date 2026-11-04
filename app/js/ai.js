@@ -13,7 +13,8 @@ function sampler() {
 export async function ask(input, opts = {}) {
   const s = await sampler();
   if (!s) throw { code: "unavailable", message: "local model missing" };
-  const { text } = await s(input, opts);
+  const { text, truncated } = await s(input, opts);
+  if (opts.requireComplete && truncated) throw { code: "truncated", message: "completion length limit" };
   return text;
 }
 

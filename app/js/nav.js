@@ -2,7 +2,7 @@
 import { state } from "./state.js";
 import { $ } from "./util.js";
 
-export const TABS = ["talk", "accent", "vocab", "voices", "models", "me"];
+export const TABS = ["talk", "accent", "vocab", "translate", "voices", "models", "me"];
 const renderers = {};
 const cleanups = {};
 const details = {};
@@ -156,6 +156,7 @@ export function show() {
   $("#view-summary").hidden = !(talk && state.talkView === "summary");
   for (const tab of [...TABS.slice(1), "mode"]) $("#view-" + tab).hidden = state.tab !== tab;
   for (const tab of TABS) $("#tab-" + tab).setAttribute("aria-selected", String(state.tab === tab));
+  $("#tab-" + state.tab)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
 }
 
 export function setTab(tab, options) {
