@@ -25,10 +25,10 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = ".asound-web-build"
-DIRECTORIES = {"audio", "css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary"}
+DIRECTORIES = {"audio", "css", "fonts", "img", "js", "kokoro", "locales", "vendor", "vocabulary", "dictionary"}
 ROOT_FILES = {"index.html", "manifest.webmanifest", "packs.json"}
 OPTIONAL_ROOT_FILES = {"repair.html", "voice-check.html"}
-LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/", "vocabulary/relations.json",
+LAZY_PREFIXES = ("audio/", "vendor/", "kokoro/", "img/vocabulary/", "vocabulary/relations.json", "dictionary/",
                  "vocabulary/illustrations.json", "vocabulary/cet-2016-index.json")  # provenance/reference, not read at run time
 RELEASE_LINE = 'const RELEASE = "development"; // @asound-release'
 ASSETS_LINE = 'const ASSETS = []; // @asound-assets'

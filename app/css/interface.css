@@ -7,6 +7,12 @@
 .brand { font-size: 19px; letter-spacing: -.025em; gap: 9px; }
 .brand-mark { border-radius: 10px; }
 .app-version { display: inline-block; font-size: 11px; font-weight: 500; letter-spacing: 0; color: var(--muted); white-space: nowrap; }
+.lookup-actions, .lookup-forms { display: flex; flex-wrap: wrap; gap: 8px; }
+.lookup-meaning { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; }
+.lookup-word .title { overflow-wrap: anywhere; }
+.lookup-word summary { cursor: pointer; padding: 10px 0; }
+#lookup-input { width: 100%; min-height: 84px; font: inherit; font-size: 16px; resize: vertical; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); line-height: 1.5; }
+#lookup-input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .topbar .tab { color: var(--muted); opacity: 1; font-weight: 600; border-radius: 10px; }
 .topbar .tab[aria-selected="true"] { color: var(--blue); background: var(--blue-soft); box-shadow: none; border-radius: 10px; }
 .topbar .tab:hover, .topbar .icon-btn:hover { background: var(--surface-2); }

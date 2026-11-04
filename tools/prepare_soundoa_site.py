@@ -41,6 +41,7 @@ EXTENSIONS = {
     "kokoro": {".js", ".mjs", ".wasm", ".json", ".txt", ".md"},
     "vendor": {".js", ".mjs", ".wasm", ".json", ".txt", ".md"},
     "vocabulary": {".json", ".txt", ".md"},
+    "dictionary": {".json"},
 }
 FORBIDDEN_NAME = re.compile(r"(?:^|[._-])(?:secret|secrets|credential|credentials|private|api[_-]?key|id_rsa)(?:[._-]|$)", re.I)
 FORBIDDEN_DIRECTORIES = {"test", "tests", "logs", "models", "weights", "backend", "__pycache__", "node_modules"}

@@ -34,7 +34,7 @@ const server = http.createServer((req, res) => {
     await page.goto(base + '?web&nogpu#models');
     await page.locator('#download-route-original').waitFor();
     assert.equal(await page.locator('#download-route-original').getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.locator('.brand .app-version').innerText(), 'V1.01');
+    assert.equal(await page.locator('.brand .app-version').innerText(), 'V1.02');
     await page.locator('#download-route-aliyun').click();
     await page.locator('#download-invitation').fill('wrong');
     await page.getByRole('button', {name:'验证邀请码',exact:true}).click();
